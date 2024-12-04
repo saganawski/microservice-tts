@@ -23,7 +23,6 @@ public class LambdaStack extends Stack {
                 .code(Code.fromAsset("lambdas/file-validation-lambda/target/file-validation-lambda.jar"))
                 .handler("com.myorg.FileValidationLambda::handleRequest")
                 .environment(Map.of(
-                        "CHUNK_BUCKET_NAME", chunkFileBucket,
                         "ORIGINAL_BUCKET_NAME", originalFileBucket
                 ))
                 .build();
