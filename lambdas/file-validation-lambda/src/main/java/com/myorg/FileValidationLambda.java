@@ -2,51 +2,105 @@ package com.myorg;
 
 import com.amazonaws.services.lambda.runtime.Context;
 import com.amazonaws.services.lambda.runtime.RequestHandler;
+import org.apache.commons.fileupload2.core.DiskFileItemFactory;
+import org.apache.commons.fileupload2.core.FileItem;
+import org.apache.commons.fileupload2.core.RequestContext;
+import org.apache.commons.fileupload2.javax.JavaxServletFileUpload;
+import software.amazon.awssdk.core.sync.RequestBody;
+import software.amazon.awssdk.regions.Region;
+import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.PutObjectRequest;
+import software.amazon.awssdk.services.s3.model.PutObjectResponse;
 
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
+import java.util.List;
 import java.util.Map;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 public class FileValidationLambda implements RequestHandler<Map<String, Object>, String> {
 
     private static final String ORIGINAL_BUCKET_NAME = System.getenv("ORIGINAL_BUCKET_NAME");
-    private static final Pattern FILE_DETAILS_PATTERN = Pattern.compile(
-            "Content-Disposition: form-data; name=\"[^\"]*\"; filename=\"([^\"]*)\".*Content-Type: ([^\\s]*)",
-            Pattern.DOTALL
-    );
+    private final S3Client s3Client = S3Client.builder().region(Region.US_EAST_1).build();
+
 
     @Override
     public String handleRequest(Map<String, Object> event, Context context) {
 
         context.getLogger().log("Received event: " + event);
         context.getLogger().log("Original bucket name: " + ORIGINAL_BUCKET_NAME);
+//        Original bucket name: original-file-bucket272765753210.s3.amazonaws.com
 
         final String body = (String) event.get("body");
         if(body == null) {
             return "Invalid request: No body found.";
         }
 
-        //parse the file details from the body
-        final Matcher matcher = FILE_DETAILS_PATTERN.matcher(body);
-        if(!matcher.find()) {
-            return "Invalid request: No file details found.";
+        final boolean isBase64Encoded = (boolean) event.get("isBase64Encoded");
+        final byte[] bodyBytes = isBase64Encoded ? Base64.getDecoder().decode(body) : body.getBytes(StandardCharsets.UTF_8);
+        try {
+            final DiskFileItemFactory factory = DiskFileItemFactory.builder().get();
+            final JavaxServletFileUpload fileUpload = new JavaxServletFileUpload(factory);
+
+            //parse the request
+            final List<FileItem> fileItems = fileUpload.parseRequest(new RequestContext(){
+
+                @Override
+                public String getCharacterEncoding() {
+                    return StandardCharsets.UTF_8.name();
+                }
+
+                @Override
+                public long getContentLength() {
+                    return bodyBytes.length;
+                }
+
+                @Override
+                public String getContentType() {
+                    final Map<String, String> headers = (Map<String, String>) event.get("headers");
+                    return headers.get("Content-Type");
+                }
+
+                @Override
+                public InputStream getInputStream() throws IOException {
+                    return new ByteArrayInputStream(bodyBytes);
+                }
+            });
+
+            for(FileItem fileItem : fileItems) {
+                if(!fileItem.isFormField()) {
+                    final String fileName = fileItem.getName();
+                    final String contentType = fileItem.getContentType();
+                    context.getLogger().log("File name: " + fileName);
+                    context.getLogger().log("Content type: " + contentType);
+
+                    if(!isSupportedFileType(fileName, contentType)) {
+                        return "File type not supported";
+                    }
+
+                    //upload the file to the original bucket
+                    final PutObjectRequest putObjectRequest = PutObjectRequest.builder()
+                            .bucket(ORIGINAL_BUCKET_NAME)
+                            .key(fileName)
+                            .build();
+                    final PutObjectResponse putObjectResponse = s3Client.putObject(
+                            putObjectRequest, RequestBody.fromInputStream(fileItem.getInputStream(), fileItem.getSize()));
+
+                    context.getLogger().log("File upload response: " + putObjectResponse);
+                    return "file uploaded successfully to " + ORIGINAL_BUCKET_NAME;
+                }
+            }
+
+            return "Invalid request: No file found.";
+        } catch (Exception e) {
+            context.getLogger().log("Error decoding body: " + e.getMessage());
+            return "Error uploading file to bucket: " + e.getMessage();
+        } catch (Throwable t){
+            context.getLogger().log("Error parsing request: " + t.getMessage());
+            return "Error uploading file to bucket: " + t.getMessage();
         }
-
-        final String fileName = matcher.group(1);
-        final String fileType = matcher.group(2);
-
-        context.getLogger().log("File name: " + fileName);
-        context.getLogger().log("File type: " + fileType);
-
-        if(!isSupportedFileType(fileName, fileType)) {
-            return "File type not supported";
-        }
-
-        context.getLogger().log("File is valid");
-        //upload the file to the original bucket
-
-
-        return "File is valid";
     }
 
     private boolean isSupportedFileType(String filename, String contentType) {
