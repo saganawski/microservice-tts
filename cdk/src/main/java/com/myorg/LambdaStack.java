@@ -21,7 +21,7 @@ public class LambdaStack extends Stack {
         validationLambda = Function.Builder.create(this, "FileValidationLambda")
                 .runtime(software.amazon.awscdk.services.lambda.Runtime.JAVA_21)
                 .code(Code.fromAsset("lambdas/file-validation-lambda/target/file-validation-lambda.jar"))
-                .handler("FileValidationLambda::handleRequest")
+                .handler("com.myorg.FileValidationLambda::handleRequest")
                 .environment(Map.of(
                         "CHUNK_BUCKET_NAME", chunkFileBucket,
                         "ORIGINAL_BUCKET_NAME", originalFileBucket
@@ -31,7 +31,7 @@ public class LambdaStack extends Stack {
         transformLambda = Function.Builder.create(this, "TransformLambda")
                 .runtime(Runtime.JAVA_21)
                 .code(Code.fromAsset("lambdas/file-transform-lambda/target/file-transform-lambda.jar"))
-                .handler("TransformLambda::handleRequest")
+                .handler("com.myorg.TransformLambda::handleRequest")
                 .environment(Map.of(
                         "ORIGINAL_BUCKET_NAME", originalFileBucket,
                         "CHUNK_BUCKET_NAME", chunkFileBucket
@@ -43,16 +43,12 @@ public class LambdaStack extends Stack {
         ttsLambda = Function.Builder.create(this, "TTSLambda")
                 .runtime(Runtime.JAVA_21)
                 .code(Code.fromAsset("lambdas/file-tts-lambda/target/file-tts-lambda.jar"))
-                .handler("com.lambdas.TtsLambda::handleRequest")
+                .handler("com.myorg.TtsLambda::handleRequest")
                 .environment(Map.of(
                         "CHUNK_BUCKET_NAME", chunkFileBucket,
                         "PROCESSED_BUCKET_NAME", processedFileBucket
                 ))
                 .build();
-/*
-        // Event Triggers
-        originalFileBucket.addEventNotification(EventType.OBJECT_CREATED,  new LambdaDestination(transformLambda));
-        chunkFileBucket.addEventNotification(EventType.OBJECT_CREATED, new LambdaDestination(ttsLambda));*/
 
     }
 

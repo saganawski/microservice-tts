@@ -12,15 +12,8 @@ public class S3Stack extends Stack {
     private final Bucket chunkFileBucket;
     private final Bucket processedFileBucket;
 
-    //generate UUID to string
-    private static final String generateUUID() {
-        return UUID.randomUUID().toString().replace("-", "");
-    }
-
-    public S3Stack(final Construct scope, final String id, final StackProps props) {
+    public S3Stack(final Construct scope, final String id, final StackProps props, String uuid) {
         super(scope, id, props);
-
-        final String uuid = generateUUID();
 
         originalFileBucket = Bucket.Builder.create(this, "OriginalFileBucket")
                 .bucketName("original-file-bucket" + uuid)

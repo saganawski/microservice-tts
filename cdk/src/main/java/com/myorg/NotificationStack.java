@@ -17,7 +17,7 @@ public class NotificationStack extends Stack {
         final Function notificationLambda = Function.Builder.create(this, "NotificationLambda")
                 .runtime(Runtime.JAVA_21)
                 .code(Code.fromAsset("lambdas/notification-lambda/target/notification-lambda.jar"))
-                .handler("com.example.lambdas.NotificationLambda::handleRequest")
+                .handler("com.myorg.NotificationLambda::handleRequest")
                 .build();
 
         // SES setup for email notifications

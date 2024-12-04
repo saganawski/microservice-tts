@@ -1,3 +1,5 @@
+package com.myorg;
+
 import com.amazonaws.services.lambda.runtime.Context;
 import com.amazonaws.services.lambda.runtime.RequestHandler;
 
@@ -11,9 +13,10 @@ public class FileValidationLambda implements RequestHandler<Map<String, Object>,
     public String handleRequest(Map<String, Object> event, Context context) {
         context.getLogger().log("Received event: " + event);
         context.getLogger().log("Original bucket name: " + ORIGINAL_BUCKET_NAME);
-        context.getLogger().log("Context: " + context);
-        // Validate the file
-        //TODO: this should be a boolean and some actual validation on file type. I.E. PDF or Txt
+        // TODO: get the file type from event.filename or some property in the event
+        //TODO: if file type is not PDF or Txt, return "File type not supported"
+        //TODO: if file type is PDF or Txt, return file is valid and upload file to original bucket
+
         return "File is valid";
     }
 }
