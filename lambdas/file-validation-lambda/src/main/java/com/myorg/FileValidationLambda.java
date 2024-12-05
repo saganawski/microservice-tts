@@ -31,7 +31,6 @@ public class FileValidationLambda implements RequestHandler<Map<String, Object>,
 
         context.getLogger().log("Received event: " + event);
         context.getLogger().log("Original bucket name: " + ORIGINAL_BUCKET_NAME);
-//        Original bucket name: original-file-bucket272765753210.s3.amazonaws.com
 
         final String body = (String) event.get("body");
         if(body == null) {
