@@ -1,3 +1,5 @@
+package com.myorg;
+
 import com.amazonaws.services.lambda.runtime.RequestHandler;
 
 import java.util.Map;

@@ -1,3 +1,9 @@
+package com.myorg;
+
+import com.amazonaws.services.lambda.runtime.Context;
+import com.amazonaws.services.lambda.runtime.RequestHandler;
+
+import java.util.Map;
 
 public class NotificationLambda implements RequestHandler<Map<String, Object>, String> {
 
