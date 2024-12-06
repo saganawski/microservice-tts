@@ -7,6 +7,7 @@ import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectResponse;
 
+import java.io.ByteArrayOutputStream;
 import java.nio.file.Paths;
 import java.util.List;
 import java.util.Map;
@@ -41,10 +42,20 @@ public class TransformLambda implements RequestHandler<Map<String, Object>, Stri
                     .key(fileName)
                     .build();
 
-            final GetObjectResponse object = s3Client.getObject(objectRequest, ResponseTransformer.toFile(Paths.get("/tmp/" + fileName)));
+            /*final GetObjectResponse object = s3Client.getObject(objectRequest, ResponseTransformer.toFile(Paths.get("/tmp/" + fileName)));
             
             final boolean successful = object.sdkHttpResponse().isSuccessful();
+            context.getLogger().log("Download successful: " + successful);*/
+
+            final ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+            final GetObjectResponse s3Object = s3Client.getObject(objectRequest, ResponseTransformer.toOutputStream(outputStream));
+
+            final boolean successful = s3Object.sdkHttpResponse().isSuccessful();
             context.getLogger().log("Download successful: " + successful);
+
+            byte[] fileContent = outputStream.toByteArray();
+
+            byte[] transformedContent = transformFileContent(fileContent);
 
 
             // split the file into 4096 character chunks labeled with a sequence number and filename
@@ -52,6 +63,11 @@ public class TransformLambda implements RequestHandler<Map<String, Object>, Stri
             // Transform the file
             return "File has been transformed";
         }
+
+    private byte[] transformFileContent(byte[] fileContent) {
+        // Transform the file content
+        return fileContent;
+    }
 }
 
 //The API input limit to TTS models is currently 4096 characters.
