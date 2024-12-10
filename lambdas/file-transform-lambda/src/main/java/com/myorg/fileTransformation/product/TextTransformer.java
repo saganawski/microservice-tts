@@ -23,7 +23,9 @@ public class TextTransformer extends TransformFile {
             final byte[] part = fileContent.substring(start, end).getBytes(StandardCharsets.UTF_8);
 
             splitContent.add(Map.of(fileName + "-part-" + partNumber, part));
+
             start = end;
+            partNumber++;
         }
 
         return splitContent;
