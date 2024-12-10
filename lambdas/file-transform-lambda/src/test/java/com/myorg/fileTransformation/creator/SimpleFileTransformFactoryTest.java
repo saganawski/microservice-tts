@@ -6,8 +6,8 @@ import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-public class SimpleFileTransformFactoryTest {
-//TODO: add test not under src root but its own thing
+class SimpleFileTransformFactoryTest {
+
     @Test
     public void testCreateTransformFile_PositiveExample() {
         SimpleFileTransformFactory factory = new SimpleFileTransformFactory();
