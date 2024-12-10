@@ -87,7 +87,8 @@ public class FileValidationLambda implements RequestHandler<Map<String, Object>,
                     final PutObjectResponse putObjectResponse = s3Client.putObject(
                             putObjectRequest, RequestBody.fromInputStream(fileItem.getInputStream(), fileItem.getSize()));
 
-                    context.getLogger().log("File upload response: " + putObjectResponse);
+                    context.getLogger().log("File upload successful? : " + putObjectResponse.sdkHttpResponse().isSuccessful());
+                    //TODO: have a more meaningful response
                     return "file uploaded successfully to " + ORIGINAL_BUCKET_NAME;
                 }
             }
