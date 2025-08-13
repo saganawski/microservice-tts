@@ -10,8 +10,10 @@ import software.amazon.awscdk.services.s3.Bucket;
 import software.amazon.awscdk.services.s3.EventType;
 import software.amazon.awscdk.services.s3.notifications.LambdaDestination;
 import software.constructs.Construct;
+import software.amazon.awscdk.Duration;
 
 import java.util.Map;
+
 
 public class FileFlowStack extends Stack {
     private final Function validationLambda;
@@ -21,7 +23,8 @@ public class FileFlowStack extends Stack {
         super(scope, id, props);
 
         final String accountNumber = "272765753210";
-        //TODO: bucket names
+
+        // TODO: bucket names
 
         final Bucket originalFileBucket = Bucket.Builder.create(this, "OriginalFileBucket")
                 .bucketName("original-file-bucket" + accountNumber)
@@ -43,8 +46,7 @@ public class FileFlowStack extends Stack {
                 .code(Code.fromAsset("lambdas/file-validation-lambda/target/file-validation-lambda.jar"))
                 .handler("com.myorg.FileValidationLambda::handleRequest")
                 .environment(Map.of(
-                        "ORIGINAL_BUCKET_NAME", originalFileBucket.getBucketName()
-                ))
+                        "ORIGINAL_BUCKET_NAME", originalFileBucket.getBucketName()))
                 .timeout(Duration.minutes(5))
                 .build();
 
@@ -57,8 +59,7 @@ public class FileFlowStack extends Stack {
                 .handler("com.myorg.TransformLambda::handleRequest")
                 .environment(Map.of(
                         "ORIGINAL_BUCKET_NAME", originalFileBucket.getBucketName(),
-                        "CHUNK_BUCKET_NAME", chunkFileBucket.getBucketName()
-                ))
+                        "CHUNK_BUCKET_NAME", chunkFileBucket.getBucketName()))
                 .timeout(Duration.minutes(5))
                 .build();
 
@@ -73,19 +74,21 @@ public class FileFlowStack extends Stack {
                 .handler("com.myorg.TtsLambda::handleRequest")
                 .environment(Map.of(
                         "CHUNK_BUCKET_NAME", chunkFileBucket.getBucketName(),
-                        "PROCESSED_BUCKET_NAME", processedFileBucket.getBucketName()
-                ))
-                .timeout(Duration.minutes(5))
+                        "PROCESSED_BUCKET_NAME", processedFileBucket.getBucketName(),
+                        "OPENAI_API_KEY", System.getenv("OPENAI_API_KEY")))
+                .timeout(Duration.minutes(15))
+                .memorySize(1024)
                 .build();
 
         // Grant permissions to the lambda functions to access the S3 buckets
         chunkFileBucket.grantRead(ttsLambda);
         processedFileBucket.grantPut(ttsLambda);
 
-        //add the S3 event notification
+        // add the S3 event notification
         originalFileBucket.addEventNotification(EventType.OBJECT_CREATED, new LambdaDestination(transformLambda));
         chunkFileBucket.addEventNotification(EventType.OBJECT_CREATED, new LambdaDestination(ttsLambda));
     }
+
     public Function getValidationLambda() {
         return validationLambda;
     }
