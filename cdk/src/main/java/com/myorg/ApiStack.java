@@ -12,6 +12,7 @@ import software.amazon.awscdk.services.logs.RetentionDays;
 import software.constructs.Construct;
 
 import java.util.List;
+import java.util.Map;
 
 public class ApiStack extends Stack {
     public ApiStack(final Construct scope, final String id, final StackProps props, final Function validationLambda) {
@@ -40,30 +41,41 @@ public class ApiStack extends Stack {
         final RestApi api = RestApi.Builder.create(this, "WebApi")
                 .restApiName("FileProcessingApi")
                 .description("This service serves as and entry point for users to upload files.")
+                .binaryMediaTypes(List.of(
+                        "application/pdf",
+                        "application/epub+zip", // EPUB
+                        "text/plain"
+                ))
                 .deployOptions(StageOptions.builder()
                         .accessLogDestination(new LogGroupLogDestination(apiLogGroup))
                         .accessLogFormat(AccessLogFormat.custom(
-                                        "{ \"requestId\":\"$context.requestId\", " +
-                                                "\"ip\":\"$context.identity.sourceIp\", " +
-                                                "\"caller\":\"$context.identity.caller\", " +
-                                                "\"user\":\"$context.identity.user\", " +
-                                                "\"requestTime\":\"$context.requestTime\", " +
-                                                "\"httpMethod\":\"$context.httpMethod\", " +
-                                                "\"resourcePath\":\"$context.resourcePath\", " +
-                                                "\"status\":\"$context.status\", " +
-                                                "\"responseLength\":\"$context.responseLength\" }"
-                                ))
-                        .loggingLevel(MethodLoggingLevel.INFO) // Log all request information
-                        .dataTraceEnabled(true) // Enable full request/response logging
+                                "{ \"requestId\":\"$context.requestId\", " +
+                                        "\"ip\":\"$context.identity.sourceIp\", " +
+                                        "\"requestTime\":\"$context.requestTime\", " +
+                                        "\"httpMethod\":\"$context.httpMethod\", " +
+                                        "\"resourcePath\":\"$context.resourcePath\", " +
+                                        "\"status\":\"$context.status\", " +
+                                        "\"responseLength\":\"$context.responseLength\" }"
+                        ))
+                        .loggingLevel(MethodLoggingLevel.INFO)
+                        .dataTraceEnabled(true)
                         .build())
                 .build();
 
         // Ensure the Stage depends on the CfnAccount resource
         api.getDeploymentStage().getNode().addDependency(cfnAccount);
 
-        final LambdaIntegration fileUploadIntegration = new LambdaIntegration(validationLambda);
+        final Resource fileUpload = api.getRoot().addResource("file_upload");
+        fileUpload.addMethod(
+                "POST",
+                new LambdaIntegration(validationLambda),
+                MethodOptions.builder()
+                        .requestParameters(Map.of(
+                                "method.request.header.Content-Type", true
+                        ))
+                        .build()
+        );
 
-        api.getRoot().addResource("file-upload").addMethod("POST", fileUploadIntegration);
     }
 
 }
