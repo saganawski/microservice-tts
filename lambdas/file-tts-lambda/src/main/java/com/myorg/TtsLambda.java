@@ -17,8 +17,9 @@ import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectResponse;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
-import com.amazonaws.services.lambda.runtime.RequestHandler;
 import software.amazon.awssdk.services.s3.model.PutObjectResponse;
+
+
 
 public class TtsLambda implements RequestHandler<Map<String, Object>, String> {
     private static final String CHUNK_BUCKET_NAME = System.getenv("CHUNK_BUCKET_NAME");
@@ -73,31 +74,6 @@ public class TtsLambda implements RequestHandler<Map<String, Object>, String> {
         }
     }
 
-    private String extractBucketName(Map<String, Object> event) {
-        Map<String, Object> records = (Map<String, Object>) ((java.util.List<?>) event.get("Records")).get(0);
-        Map<String, Object> s3 = (Map<String, Object>) records.get("s3");
-        Map<String, Object> bucket = (Map<String, Object>) s3.get("bucket");
-        return (String) bucket.get("name");
-    }
-
-    private String extractObjectKey(Map<String, Object> event) {
-        Map<String, Object> records = (Map<String, Object>) ((java.util.List<?>) event.get("Records")).get(0);
-        Map<String, Object> s3 = (Map<String, Object>) records.get("s3");
-        Map<String, Object> object = (Map<String, Object>) s3.get("object");
-        return (String) object.get("key");
-    }
-
-    private String downloadFileFromS3(String bucketName, String objectKey, Context context) throws IOException {
-        context.getLogger().log("Downloading file from S3: " + bucketName + "/" + objectKey);
-
-        GetObjectRequest getObjectRequest = GetObjectRequest.builder()
-                .bucket(bucketName)
-                .key(objectKey)
-                .build();
-
-        ResponseBytes<GetObjectResponse> objectBytes = s3Client.getObjectAsBytes(getObjectRequest);
-        return objectBytes.asString(StandardCharsets.UTF_8);
-    }
 
     private byte[] convertTextToSpeech(String textContent, Context context) throws IOException, InterruptedException {
         context.getLogger().log("Converting text to speech using OpenAI API");
@@ -201,5 +177,31 @@ public class TtsLambda implements RequestHandler<Map<String, Object>, String> {
             
             throw new RuntimeException("Failed to upload audio file to S3", e);
         }
+    }
+
+    private String extractBucketName(Map<String, Object> event) {
+        Map<String, Object> records = (Map<String, Object>) ((java.util.List<?>) event.get("Records")).get(0);
+        Map<String, Object> s3 = (Map<String, Object>) records.get("s3");
+        Map<String, Object> bucket = (Map<String, Object>) s3.get("bucket");
+        return (String) bucket.get("name");
+    }
+
+    private String extractObjectKey(Map<String, Object> event) {
+        Map<String, Object> records = (Map<String, Object>) ((java.util.List<?>) event.get("Records")).get(0);
+        Map<String, Object> s3 = (Map<String, Object>) records.get("s3");
+        Map<String, Object> object = (Map<String, Object>) s3.get("object");
+        return (String) object.get("key");
+    }
+
+    private String downloadFileFromS3(String bucketName, String objectKey, Context context) throws IOException {
+        context.getLogger().log("Downloading file from S3: " + bucketName + "/" + objectKey);
+
+        GetObjectRequest getObjectRequest = GetObjectRequest.builder()
+                .bucket(bucketName)
+                .key(objectKey)
+                .build();
+
+        ResponseBytes<GetObjectResponse> objectBytes = s3Client.getObjectAsBytes(getObjectRequest);
+        return objectBytes.asString(StandardCharsets.UTF_8);
     }
 }

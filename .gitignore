@@ -4,6 +4,11 @@
 *.iws
 *.ipr
 
+# Eclipse
+.project
+.settings/
+.classpath
+
 # Maven
 target/
 
