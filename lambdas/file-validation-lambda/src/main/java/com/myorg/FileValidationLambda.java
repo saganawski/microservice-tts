@@ -21,15 +21,24 @@ import java.util.UUID;
 
 //public class FileValidationLambda implements RequestHandler<Map<String, Object>, String> {
 public class FileValidationLambda implements RequestHandler<APIGatewayProxyRequestEvent, APIGatewayProxyResponseEvent> {
-  private final S3Client s3Client = S3Client.builder().region(Region.US_EAST_1).build();
-
-  private static final String ORIGINAL_BUCKET_NAME = System.getenv("ORIGINAL_BUCKET_NAME");
+  private final S3Client s3Client;
+  private final String originalBucketName;
   private static final Set<String> ALLOWED_CT = Set.of("application/pdf", "application/epub+zip", "text/plain");
+
+  public FileValidationLambda() {
+    this(S3Client.builder().region(Region.US_EAST_1).build(), System.getenv("ORIGINAL_BUCKET_NAME"));
+  }
+
+  // Constructor for testing
+  public FileValidationLambda(S3Client s3Client, String originalBucketName) {
+    this.s3Client = s3Client;
+    this.originalBucketName = originalBucketName;
+  }
 
   @Override
   public APIGatewayProxyResponseEvent handleRequest(APIGatewayProxyRequestEvent event, Context context) {
     context.getLogger().log("Received event: " + event);
-    context.getLogger().log("Original bucket name: " + ORIGINAL_BUCKET_NAME);
+    context.getLogger().log("Original bucket name: " + originalBucketName);
 
     final Map<String, String> headers = event.getHeaders();
     // Map<String, String> queryStringParameters = event.getQueryStringParameters();
@@ -53,7 +62,7 @@ public class FileValidationLambda implements RequestHandler<APIGatewayProxyReque
     
     try {
       final PutObjectRequest putObjectRequest = PutObjectRequest.builder()
-          .bucket(ORIGINAL_BUCKET_NAME)
+          .bucket(originalBucketName)
           .key(fileName)
           .contentType(contentType)
           .build();
@@ -73,7 +82,7 @@ public class FileValidationLambda implements RequestHandler<APIGatewayProxyReque
         + " Successfully validated and uploaded to the next step");
   }
 
-  private static String extractFileName(String contentDisposition, String contentType) {
+  public static String extractFileName(String contentDisposition, String contentType) {
     // Try to extract filename from Content-Disposition header
     if (contentDisposition != null) {
       String[] parts = contentDisposition.split(";");
@@ -108,7 +117,7 @@ public class FileValidationLambda implements RequestHandler<APIGatewayProxyReque
     return "upload_" + Instant.now().getEpochSecond() + extension;
   }
 
-  private static String header(Map<String, String> h, String key) {
+  public static String header(Map<String, String> h, String key) {
     if (h == null)
       return null;
     String v = h.get(key);
