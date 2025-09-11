@@ -1,11 +1,16 @@
-.classpath.txt
-target
-.classpath
-.project
-.idea
-.settings
-.vscode
+# IntelliJ
+.idea/
 *.iml
+*.iws
+*.ipr
+
+# Eclipse
+.project
+.settings/
+.classpath
+
+# Maven
+target/
 
 # CDK asset staging directory
 .cdk.staging
