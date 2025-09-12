@@ -194,7 +194,3 @@ All Lambda functions include comprehensive CloudWatch logging:
 - Current timeout is 5 minutes
 - Check CloudWatch logs for performance issues
 - Consider increasing memory allocation for large files
-
----
-
-*Built with ❤️ using AWS CDK and Java 21*
