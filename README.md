@@ -1,91 +1,196 @@
-# Microservice Text-to-Speech Pipeline
+# Text-to-Speech Microservice
 
-A serverless workflow for converting uploaded documents into audio using AWS services. The project is built with Java 21 and AWS CDK v2, and uses several Lambda functions to process files through validation, transformation, text-to-speech generation and notification steps.
+A serverless text-to-speech (TTS) system built on AWS using AWS CDK, Java 21, and Maven. This microservice processes document uploads through a series of Lambda functions, transforming text files into audio output via TTS services.
 
-## Table of Contents
-- [Project Structure](#project-structure)
-- [Features](#features)
-- [Tech Stack](#tech-stack)
-- [Prerequisites](#prerequisites)
-- [Setup](#setup)
-- [Testing](#testing)
-- [Deployment](#deployment)
-- [Contributing](#contributing)
-- [License](#license)
+## 🏗️ Architecture
 
-## Project Structure
+The system consists of two main CDK stacks that create a fully managed serverless pipeline:
+
+### FileFlowStack
+- **OriginalFileBucket**: Stores uploaded files (PDF/TXT/EPUB)
+- **ChunkFileBucket**: Stores text chunks split from original files for TTS processing
+- **ProcessedFileBucket**: Stores final audio files
+- **ValidationLambda**: Validates file uploads and stores in OriginalFileBucket
+- **TransformLambda**: Downloads files, splits into 4096-character chunks for TTS API limits
+- **TTSLambda**: Converts text chunks to audio files
+
+### ApiStack
+- **REST API**: Provides `/file-upload` POST endpoint via API Gateway
+- **CloudWatch Integration**: Comprehensive logging with custom access log format
+- **IAM Roles**: Proper permissions for API Gateway CloudWatch logging
+
+## 🔄 Processing Flow
+
+1. **File Upload** → API Gateway receives file via `/file-upload` endpoint
+2. **Validation** → ValidationLambda validates file type and stores in OriginalFileBucket
+3. **Transformation** → S3 event triggers TransformLambda to chunk file into 4096-char segments
+4. **TTS Processing** → ChunkFileBucket events trigger TTSLambda to convert text to audio
+5. **Storage** → Final audio files stored in ProcessedFileBucket
+
+## 📁 Project Structure
+
 ```
-.
-├── cdk/                      # Infrastructure as code written with AWS CDK
-├── lambdas/
-│   ├── file-validation-lambda/   # Validates file uploads before storing in S3
-│   ├── file-transform-lambda/    # Splits files into token-sized chunks
-│   ├── file-tts-lambda/          # Generates audio from text (placeholder)
-│   └── notification-lambda/      # Sends notifications after processing
-└── pom.xml                   # Maven multi-module configuration
+microservice-tts/
+├── cdk/                           # CDK infrastructure code
+│   └── src/main/java/com/myorg/
+│       ├── TtsApp.java           # Main CDK application
+│       ├── FileFlowStack.java    # S3 buckets and Lambda definitions
+│       └── ApiStack.java         # API Gateway configuration
+├── lambdas/                      # Lambda function implementations
+│   ├── file-validation-lambda/   # File upload validation and storage
+│   ├── file-transform-lambda/    # Text extraction and chunking
+│   ├── file-tts-lambda/         # Text-to-speech conversion
+│   └── notification-lambda/      # (Not currently integrated)
+├── pom.xml                      # Root Maven configuration
+├── cdk.json                     # CDK configuration
+└── CLAUDE.md                    # Development guidelines
 ```
 
-## Features
-- **File validation** – Verifies incoming uploads and stores valid files in the `ORIGINAL_BUCKET_NAME` S3 bucket, rejecting unsupported file types
-- **File transformation** – Downloads validated files, splits them into 4 kB chunks and uploads each chunk to `CHUNK_BUCKET_NAME` for downstream text-to-speech processing
-- **Text-to-speech generation** – Placeholder Lambda module designed to convert text chunks to audio files
-- **Notifications** – Sends a simple notification after processing completes
+## 🛠️ Prerequisites
 
-## Tech Stack
-- Java 21
-- Maven for build and dependency management
-- AWS Lambda & AWS SDK for Java v2
-- Amazon S3 for temporary and chunk storage
-- AWS CDK v2 for provisioning infrastructure
-- JUnit 5 for unit tests
-
-## Prerequisites
-- **Java Development Kit (JDK) 21**
-- **Apache Maven** 3.8+
-- **Node.js** and **npm** for AWS CDK CLI
-- **AWS CLI** with credentials configured
-- An AWS account for deploying infrastructure
-
-## Setup
-1. Clone the repository
-   ```bash
-   git clone <repo-url>
-   cd microservice-tts
-   ```
-2. Build all modules
-   ```bash
-   mvn package
-   ```
-3. (Optional) Set environment variables for local testing
-   ```bash
-   export ORIGINAL_BUCKET_NAME=<source-bucket>
-   export CHUNK_BUCKET_NAME=<chunk-bucket>
-   ```
-
-## Testing
-Run the unit test suite:
+### Local Development
+- **Java 21** (OpenJDK or Oracle JDK)
+- **Apache Maven 3.6+**
+- **Node.js 18+** (for AWS CDK)
+- **AWS CDK CLI 2.x**
 ```bash
-mvn test
+npm install -g aws-cdk
 ```
-Example tests ensure the correct transformer is selected for supported file types
 
-## Deployment
-1. Install the AWS CDK CLI if not already installed:
-   ```bash
-   npm install -g aws-cdk
-   ```
-2. Synthesize the CloudFormation templates:
-   ```bash
-   cdk -a cdk synth
-   ```
-3. Deploy the stacks to your AWS account:
-   ```bash
-   cdk -a cdk deploy
-   ```
+### AWS Deployment
+- **AWS CLI** configured with appropriate credentials
+- **AWS Account** with sufficient permissions for:
+  - S3 bucket creation and management
+  - Lambda function deployment
+  - API Gateway configuration
+  - CloudWatch logging
+  - IAM role creation
 
-## Contributing
-Contributions are welcome! Please open an issue or submit a pull request for any improvements or bug fixes.
+## 🚀 Getting Started
 
-## License
-This project is currently unlicensed. Please consult the project owner before using it in production.
+### 1. Clone and Build
 
+```bash
+git clone <repository-url>
+cd microservice-tts
+mvn package
+```
+
+### 2. Deploy to AWS
+
+```bash
+# Bootstrap CDK (first time only)
+cdk bootstrap
+
+# Deploy all stacks
+cdk deploy --all
+
+# Or deploy individual stacks
+cdk deploy FileFlowStack
+cdk deploy ApiStack
+```
+
+### 3. Verify Deployment
+
+```bash
+# List deployed stacks
+cdk ls
+
+# View stack outputs
+aws cloudformation describe-stacks --stack-name FileFlowStack
+aws cloudformation describe-stacks --stack-name ApiStack
+```
+
+## 🧪 Development Commands
+
+### Build and Test
+```bash
+# Build entire project
+mvn package
+
+# Build specific lambda
+mvn -f lambdas/file-validation-lambda/pom.xml package
+
+# Run tests
+mvn test
+
+# Run tests for specific module
+mvn -f cdk/pom.xml test
+```
+
+### CDK Operations
+```bash
+# List all stacks
+cdk ls
+
+# Synthesize CloudFormation templates
+cdk synth
+
+# Show differences from deployed stacks
+cdk diff
+
+# Destroy stacks (cleanup)
+cdk destroy --all
+```
+
+## 📝 Supported File Types
+
+- **PDF** (`application/pdf`)
+- **EPUB** (`application/epub+zip`)  
+- **Plain Text** (`text/plain`)
+
+## 🔧 Configuration
+
+### Environment Variables
+- `ORIGINAL_BUCKET_NAME`: Set automatically by CDK deployment
+- Account Number: Hardcoded as `272765753210` in bucket naming
+
+### TTS Configuration
+- **Chunk Limit**: 4096 characters per chunk (OpenAI TTS API requirement)
+- **Lambda Timeout**: 5 minutes for all functions
+- **Memory**: Configured per lambda function requirements
+
+## 🚧 Current Implementation Status
+
+- ✅ **ValidationLambda**: Complete file upload and validation
+- ✅ **API Gateway**: REST endpoint with proper error handling
+- 🚧 **TransformLambda**: File download implemented, chunking in progress
+- 🚧 **TTSLambda**: Placeholder implementation
+- ❓ **NotificationLambda**: Exists but not integrated
+
+## 🔍 Monitoring and Logging
+
+All Lambda functions include comprehensive CloudWatch logging:
+- Request/response logging
+- Error tracking and debugging
+- Performance metrics
+- S3 operation status
+
+## 🤝 Contributing
+
+1. Follow existing code conventions
+2. Ensure all tests pass before submitting
+3. Update documentation for significant changes
+4. Use Java 21 features appropriately
+
+## 📄 License
+
+[Add your license information here]
+
+## 🆘 Troubleshooting
+
+### Common Issues
+
+**Build Failures**
+- Ensure Java 21 is installed and configured
+- Run `mvn clean package` to clear build cache
+
+**Deployment Issues** 
+- Verify AWS credentials are configured
+- Check CDK bootstrap status: `cdk bootstrap --show-template`
+- Ensure sufficient AWS permissions
+
+**Lambda Timeouts**
+- Current timeout is 5 minutes
+- Check CloudWatch logs for performance issues
+- Consider increasing memory allocation for large files
