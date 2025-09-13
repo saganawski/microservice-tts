@@ -19,7 +19,7 @@ A serverless workflow for converting uploaded documents into audio using AWS ser
 ├── cdk/                      # Infrastructure as code written with AWS CDK
 ├── lambdas/
 │   ├── file-validation-lambda/   # Validates file uploads before storing in S3
-│   ├── file-transform-lambda/    # Splits files into token-sized chunks
+│   ├── file-transform-lambda/    # Parses files into chunks using Mistral (mocked)
 │   ├── file-tts-lambda/          # Generates audio from text (placeholder)
 │   └── notification-lambda/      # Sends notifications after processing
 └── pom.xml                   # Maven multi-module configuration
@@ -27,7 +27,7 @@ A serverless workflow for converting uploaded documents into audio using AWS ser
 
 ## Features
 - **File validation** – Verifies incoming uploads and stores valid files in the `ORIGINAL_BUCKET_NAME` S3 bucket, rejecting unsupported file types
-- **File transformation** – Downloads validated files, splits them into 4 kB chunks and uploads each chunk to `CHUNK_BUCKET_NAME` for downstream text-to-speech processing
+- **File transformation** – Downloads validated files, sends them to the Mistral API (mocked) for parsing into chunks, and uploads each chunk to `CHUNK_BUCKET_NAME` for downstream text-to-speech processing
 - **Text-to-speech generation** – Placeholder Lambda module designed to convert text chunks to audio files
 - **Notifications** – Sends a simple notification after processing completes
 
@@ -60,6 +60,7 @@ A serverless workflow for converting uploaded documents into audio using AWS ser
    ```bash
    export ORIGINAL_BUCKET_NAME=<source-bucket>
    export CHUNK_BUCKET_NAME=<chunk-bucket>
+   export MISTRAL_API_KEY=<mistral-api-key>
    ```
 
 ## Testing

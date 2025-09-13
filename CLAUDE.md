@@ -15,7 +15,7 @@ The system consists of two main CDK stacks:
 - **ChunkFileBucket**: Stores text chunks split from original files  
 - **ProcessedFileBucket**: Stores final audio files
 - **ValidationLambda**: Validates file uploads and stores in OriginalFileBucket
-- **TransformLambda**: Downloads files from OriginalFileBucket, splits into 4096-char chunks for TTS API limits
+ - **TransformLambda**: Downloads files from OriginalFileBucket, splits into 900-char chunks for TTS API limits
 - **TTSLambda**: Converts text chunks to audio (placeholder implementation)
 
 ### ApiStack  
@@ -80,7 +80,7 @@ mvn -f cdk/pom.xml test
 - **AWS SDK v2** for S3 operations
 - **Apache Commons FileUpload2** for multipart file handling in ValidationLambda
 - **Account Number**: Hardcoded as `272765753210` in bucket names (FileFlowStack:23)
-- **TTS Chunk Limit**: 4096 characters per OpenAI TTS API requirements (TransformLambda:57)
+- **TTS Chunk Limit**: 900 characters per TTS API requirements (TransformLambda:57)
 - **Lambda Timeout**: 5 minutes for all functions
 - **S3 Event Triggers**: Automatic processing pipeline via S3 notifications
 
