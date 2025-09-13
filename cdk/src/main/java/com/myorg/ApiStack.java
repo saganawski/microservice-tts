@@ -65,16 +65,25 @@ public class ApiStack extends Stack {
         // Ensure the Stage depends on the CfnAccount resource
         api.getDeploymentStage().getNode().addDependency(cfnAccount);
 
-        final Resource fileUpload = api.getRoot().addResource("file_upload");
+        final Resource fileUpload = api.getRoot().addResource("file-upload");
+        
+        // Create Lambda integration with proper permissions
+        final LambdaIntegration lambdaIntegration = LambdaIntegration.Builder.create(validationLambda)
+                .allowTestInvoke(true)
+                .build();
+        
         fileUpload.addMethod(
                 "POST",
-                new LambdaIntegration(validationLambda),
+                lambdaIntegration,
                 MethodOptions.builder()
                         .requestParameters(Map.of(
                                 "method.request.header.Content-Type", true
                         ))
                         .build()
         );
+        
+        // Explicitly grant API Gateway permission to invoke the Lambda
+        validationLambda.grantInvoke(new ServicePrincipal("apigateway.amazonaws.com"));
 
     }
 
