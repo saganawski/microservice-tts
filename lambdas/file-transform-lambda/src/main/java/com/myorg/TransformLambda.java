@@ -55,7 +55,7 @@ public class TransformLambda implements RequestHandler<Map<String, Object>, Stri
             final boolean successful = s3Object.sdkHttpResponse().isSuccessful();
             context.getLogger().log("Download successful: " + successful);
             context.getLogger().log("did not upload for testing purposes ");
-/*            byte[] fileContent = outputStream.toByteArray();
+            byte[] fileContent = outputStream.toByteArray();
 
             // transform the file
             final TransformFile transformFile = new SimpleFileTransformFactory().createTransformFile(fileName);
@@ -71,7 +71,7 @@ public class TransformLambda implements RequestHandler<Map<String, Object>, Stri
                     final PutObjectResponse putObjectResponse = transformFile.uploadFileToS3(CHUNK_BUCKET_NAME, chunkFileName, chunkContent, s3Client);
                     context.getLogger().log(chunkFileName +" : Successful upload ?: " + putObjectResponse.sdkHttpResponse().isSuccessful());
                     //TODO: handle the case where the upload is not successful
-                });*/
+                });
 
             // TODO: return a more meaningful response
             return "File has been transformed successfully";
