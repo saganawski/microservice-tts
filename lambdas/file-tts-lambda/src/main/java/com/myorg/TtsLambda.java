@@ -2,7 +2,7 @@ package com.myorg;
 
 import com.amazonaws.services.lambda.runtime.Context;
 import com.amazonaws.services.lambda.runtime.RequestHandler;
-import com.fasterxml.jackson.databind.ObjectMapper;
+//import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.net.URI;
@@ -10,6 +10,8 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import software.amazon.awssdk.core.ResponseBytes;
 import software.amazon.awssdk.core.sync.RequestBody;
@@ -22,51 +24,75 @@ import software.amazon.awssdk.services.s3.model.PutObjectResponse;
 
 
 public class TtsLambda implements RequestHandler<Map<String, Object>, String> {
-    private static final String CHUNK_BUCKET_NAME = System.getenv("CHUNK_BUCKET_NAME");
+    private static final String MARKDOWN_BUCKET_NAME = System.getenv("MARKDOWN_BUCKET_NAME");
     private static final String PROCESSED_BUCKET_NAME = System.getenv("PROCESSED_BUCKET_NAME");
     private static final String OPENAI_API_KEY = System.getenv("OPENAI_API_KEY");
+    private static final int CHUNK_SIZE = 900;
 
     private final S3Client s3Client;
     private final HttpClient httpClient;
-    private final ObjectMapper objectMapper;
+//    private final ObjectMapper objectMapper;
 
     public TtsLambda() {
         this.s3Client = S3Client.builder().build();
         this.httpClient = HttpClient.newHttpClient();
-        this.objectMapper = new ObjectMapper();
+//        this.objectMapper = new ObjectMapper();
     }
 
     @Override
     public String handleRequest(Map<String, Object> event, Context context) {
-        context.getLogger().log("Starting TTS processing");
+        context.getLogger().log("Starting TTS processing with markdown chunking");
         context.getLogger().log("Lambda timeout: " + context.getRemainingTimeInMillis() + "ms");
         context.getLogger().log("Received event: " + event);
+
+        if (MARKDOWN_BUCKET_NAME == null || MARKDOWN_BUCKET_NAME.isEmpty()) {
+            context.getLogger().log("ERROR: MARKDOWN_BUCKET_NAME environment variable is not set");
+            throw new RuntimeException("Missing markdown bucket name");
+        }
+
+        if (PROCESSED_BUCKET_NAME == null || PROCESSED_BUCKET_NAME.isEmpty()) {
+            context.getLogger().log("ERROR: PROCESSED_BUCKET_NAME environment variable is not set");
+            throw new RuntimeException("Missing processed bucket name");
+        }
 
         try {
             // Extract bucket and key from S3 event
             String bucketName = extractBucketName(event);
             String objectKey = extractObjectKey(event);
 
-            context.getLogger().log("Processing file: " + objectKey + " from bucket: " + bucketName);
+            context.getLogger().log("Processing markdown file: " + objectKey + " from bucket: " + bucketName);
 
-            // Download file from S3
-            String textContent = downloadFileFromS3(bucketName, objectKey, context);
-            context.getLogger().log("Downloaded file content, length: " + textContent.length());
+            // Download markdown file from S3
+            String markdownContent = downloadMarkdownFromS3(bucketName, objectKey, context);
+            context.getLogger().log("Downloaded markdown content, length: " + markdownContent.length());
 
-            // Check remaining time before API call
-            context.getLogger().log("Time remaining before TTS API call: " + context.getRemainingTimeInMillis() + "ms");
+            // Chunk the markdown content into 900-character segments
+            List<String> chunks = chunkMarkdownContent(markdownContent, context);
+            context.getLogger().log("Split markdown into " + chunks.size() + " chunks of max " + CHUNK_SIZE + " characters each");
 
-            // Convert text to speech using OpenAI API
-            byte[] audioData = convertTextToSpeech(textContent, context);
-            context.getLogger().log("Generated audio data, size: " + audioData.length + " bytes");
-            context.getLogger().log("Time remaining after TTS API call: " + context.getRemainingTimeInMillis() + "ms");
+            // Process each chunk with TTS
+/*            List<String> audioFiles = new ArrayList<>();
+            for (int i = 0; i < chunks.size(); i++) {
+                String chunk = chunks.get(i);
+                context.getLogger().log("Processing chunk " + (i + 1) + "/" + chunks.size() + " (length: " + chunk.length() + ")");
 
-            // Upload MP3 to processed bucket
-            String outputKey = generateOutputKey(objectKey);
-            uploadAudioToS3(outputKey, audioData, context);
-            context.getLogger().log("Successfully uploaded audio file: " + outputKey);
+                // Check remaining time before API call
+                context.getLogger().log("Time remaining before TTS API call: " + context.getRemainingTimeInMillis() + "ms");
 
-            return "File has been transformed to audio file: " + outputKey;
+                // Convert chunk to speech using OpenAI API
+                byte[] audioData = convertTextToSpeech(chunk, context);
+                context.getLogger().log("Generated audio data for chunk " + (i + 1) + ", size: " + audioData.length + " bytes");
+
+                // Upload MP3 to processed bucket
+                String outputKey = generateChunkOutputKey(objectKey, i);
+                uploadAudioToS3(outputKey, audioData, context);
+                audioFiles.add(outputKey);
+                context.getLogger().log("Successfully uploaded audio file: " + outputKey);
+            }*/
+            String result = "Successfully processed " + chunks.size() + " chunks from markdown file. Generated Dummy test: " ;
+//            String result = "Successfully processed " + chunks.size() + " chunks from markdown file. Generated audio files: " + String.join(", ", audioFiles);
+            context.getLogger().log(result);
+            return result;
 
         } catch (Exception e) {
             context.getLogger().log("Error processing TTS: " + e.getMessage());
@@ -110,10 +136,10 @@ public class TtsLambda implements RequestHandler<Map<String, Object>, String> {
         return response.body();
     }
 
-    private String generateOutputKey(String inputKey) {
-        // Remove .txt extension and add .mp3
-        String baseName = inputKey.replaceAll("\\.txt$", "");
-        return baseName + ".mp3";
+    private String generateChunkOutputKey(String inputKey, int chunkIndex) {
+        // Remove .md extension and add chunk index and .mp3
+        String baseName = inputKey.replaceAll("\\.md$", "");
+        return String.format("%s_chunk_%03d.mp3", baseName, chunkIndex + 1);
     }
 
     private void uploadAudioToS3(String objectKey, byte[] audioData, Context context) {
@@ -193,8 +219,8 @@ public class TtsLambda implements RequestHandler<Map<String, Object>, String> {
         return (String) object.get("key");
     }
 
-    private String downloadFileFromS3(String bucketName, String objectKey, Context context) throws IOException {
-        context.getLogger().log("Downloading file from S3: " + bucketName + "/" + objectKey);
+    private String downloadMarkdownFromS3(String bucketName, String objectKey, Context context) throws IOException {
+        context.getLogger().log("Downloading markdown file from S3: " + bucketName + "/" + objectKey);
 
         GetObjectRequest getObjectRequest = GetObjectRequest.builder()
                 .bucket(bucketName)
@@ -203,5 +229,60 @@ public class TtsLambda implements RequestHandler<Map<String, Object>, String> {
 
         ResponseBytes<GetObjectResponse> objectBytes = s3Client.getObjectAsBytes(getObjectRequest);
         return objectBytes.asString(StandardCharsets.UTF_8);
+    }
+
+    private List<String> chunkMarkdownContent(String markdownContent, Context context) {
+        context.getLogger().log("Chunking markdown content into " + CHUNK_SIZE + " character segments");
+
+        List<String> chunks = new ArrayList<>();
+
+        if (markdownContent == null || markdownContent.trim().isEmpty()) {
+            context.getLogger().log("WARNING: Markdown content is empty");
+            return chunks;
+        }
+
+        String content = markdownContent.trim();
+
+        if (content.length() <= CHUNK_SIZE) {
+            chunks.add(content);
+            context.getLogger().log("Content fits in single chunk: " + content.length() + " characters");
+            return chunks;
+        }
+
+        int start = 0;
+        int chunkNumber = 1;
+
+        while (start < content.length()) {
+            int end = Math.min(start + CHUNK_SIZE, content.length());
+
+            // Try to break at word boundaries to avoid cutting words
+            if (end < content.length()) {
+                // Look for the last space, newline, or punctuation within the chunk
+                int lastSpace = Math.max(
+                    Math.max(content.lastIndexOf(' ', end), content.lastIndexOf('\n', end)),
+                    Math.max(content.lastIndexOf('.', end), content.lastIndexOf(',', end))
+                );
+
+                if (lastSpace > start) {
+                    end = lastSpace;
+                }
+            }
+
+            String chunk = content.substring(start, end).trim();
+            if (!chunk.isEmpty()) {
+                chunks.add(chunk);
+                context.getLogger().log("Created chunk " + chunkNumber + ": " + chunk.length() + " characters");
+                chunkNumber++;
+            }
+
+            // Skip any whitespace at the beginning of the next chunk
+            start = end;
+            while (start < content.length() && Character.isWhitespace(content.charAt(start))) {
+                start++;
+            }
+        }
+
+        context.getLogger().log("Successfully created " + chunks.size() + " chunks from markdown content");
+        return chunks;
     }
 }

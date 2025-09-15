@@ -54,7 +54,9 @@ public class FileValidationLambda implements RequestHandler<APIGatewayProxyReque
     // Check if this is a multipart/form-data request
     if (contentType != null && contentType.toLowerCase().startsWith("multipart/form-data")) {
       context.getLogger().log("Processing multipart/form-data upload");
-      
+      context.getLogger().log("Request is base64 encoded: " + isBase64);
+      context.getLogger().log("Body length: " + (body != null ? body.length() : 0));
+
       try {
         // Parse multipart data
         FileUploadResult result = parseMultipartData(body, contentType, isBase64, context);
@@ -175,91 +177,144 @@ public class FileValidationLambda implements RequestHandler<APIGatewayProxyReque
   }
   
   // Parse multipart/form-data content
-  private FileUploadResult parseMultipartData(String body, String contentType, boolean isBase64, Context context) 
+  private FileUploadResult parseMultipartData(String body, String contentType, boolean isBase64, Context context)
       throws IOException {
-    
-    byte[] bodyBytes = isBase64 ? Base64.getDecoder().decode(body) : body.getBytes(StandardCharsets.ISO_8859_1);
-    
-    // Extract boundary from content-type header
-    String boundary = null;
-    String[] parts = contentType.split(";");
-    for (String part : parts) {
-      part = part.trim();
-      if (part.startsWith("boundary=")) {
-        boundary = part.substring(9);
-        break;
+
+    try {
+      // For multipart/form-data with binary files, API Gateway should always base64 encode
+      // If not base64, log a warning as this could corrupt binary data
+      if (!isBase64) {
+        context.getLogger().log("WARNING: Multipart data is not base64 encoded. Binary files may be corrupted.");
       }
-    }
+
+      byte[] bodyBytes = isBase64 ? Base64.getDecoder().decode(body) : body.getBytes(StandardCharsets.ISO_8859_1);
     
-    if (boundary == null) {
-      throw new IllegalArgumentException("No boundary found in content-type header");
-    }
+      // Extract boundary from content-type header
+      String boundary = null;
+      String[] parts = contentType.split(";");
+      for (String part : parts) {
+        part = part.trim();
+        if (part.startsWith("boundary=")) {
+          boundary = part.substring(9);
+          break;
+        }
+      }
+
+      if (boundary == null) {
+        throw new IllegalArgumentException("No boundary found in content-type header");
+      }
     
-    // Simple multipart parsing for file uploads
-    String bodyString = new String(bodyBytes, StandardCharsets.ISO_8859_1);
-    String[] sections = bodyString.split("--" + boundary);
-    
-    for (String section : sections) {
-      if (section.contains("Content-Disposition: form-data") && section.contains("filename=")) {
-        // Parse the file section
-        String[] lines = section.split("\r\n");
-        String filename = null;
-        String fileContentType = "text/plain"; // default
-        int contentStart = -1;
-        
-        for (int i = 0; i < lines.length; i++) {
-          String line = lines[i];
-          if (line.contains("Content-Disposition:") && line.contains("filename=")) {
-            // Extract filename
-            int filenameStart = line.indexOf("filename=\"") + 10;
-            int filenameEnd = line.indexOf("\"", filenameStart);
+      // Binary-safe multipart parsing to preserve PDF content
+      String boundaryMarker = "--" + boundary;
+      byte[] boundaryBytes = boundaryMarker.getBytes(StandardCharsets.UTF_8);
+
+      int start = 0;
+      while (start < bodyBytes.length) {
+        // Find next boundary
+        int boundaryIndex = indexOf(bodyBytes, boundaryBytes, start);
+        if (boundaryIndex == -1) break;
+
+        // Move past the boundary
+        start = boundaryIndex + boundaryBytes.length;
+        if (start >= bodyBytes.length) break;
+
+        // Skip CRLF after boundary
+        if (start + 1 < bodyBytes.length && bodyBytes[start] == '\r' && bodyBytes[start + 1] == '\n') {
+          start += 2;
+        }
+
+        // Find next boundary to get section end
+        int nextBoundaryIndex = indexOf(bodyBytes, boundaryBytes, start);
+        if (nextBoundaryIndex == -1) nextBoundaryIndex = bodyBytes.length;
+
+        // Extract section data
+        byte[] sectionData = new byte[nextBoundaryIndex - start];
+        System.arraycopy(bodyBytes, start, sectionData, 0, sectionData.length);
+
+        // Parse headers as string (headers are always text)
+        String headers = new String(sectionData, 0, Math.min(sectionData.length, 500), StandardCharsets.UTF_8);
+        if (headers.contains("Content-Disposition:") && headers.contains("filename=")) {
+          String filename = null;
+          String fileContentType = "application/octet-stream";
+
+          // Extract filename
+          int filenameStart = headers.indexOf("filename=\"");
+          if (filenameStart != -1) {
+            filenameStart += 10;
+            int filenameEnd = headers.indexOf("\"", filenameStart);
             if (filenameEnd > filenameStart) {
-              filename = line.substring(filenameStart, filenameEnd);
+              filename = headers.substring(filenameStart, filenameEnd);
             }
-          } else if (line.startsWith("Content-Type:")) {
-            fileContentType = line.substring(13).trim();
-          } else if (line.trim().isEmpty() && i > 0) {
-            contentStart = i + 1;
-            break;
+          }
+
+          // Extract content-type
+          int ctStart = headers.indexOf("Content-Type:");
+          if (ctStart != -1) {
+            ctStart += 13;
+            int ctEnd = headers.indexOf("\r\n", ctStart);
+            if (ctEnd != -1) {
+              fileContentType = headers.substring(ctStart, ctEnd).trim();
+            }
+          }
+
+          // Find end of headers (double CRLF) using binary search
+          byte[] headerEndPattern = "\r\n\r\n".getBytes(StandardCharsets.UTF_8);
+          int headerEnd = indexOf(sectionData, headerEndPattern, 0);
+
+          if (headerEnd != -1 && filename != null) {
+            // Extract binary file content without string conversion
+            int contentStart = headerEnd + 4;
+            int contentLength = sectionData.length - contentStart;
+
+            // Remove trailing CRLF if present (but preserve all other binary data)
+            if (contentLength >= 2 &&
+                sectionData[contentStart + contentLength - 2] == '\r' &&
+                sectionData[contentStart + contentLength - 1] == '\n') {
+              contentLength -= 2;
+            }
+
+            byte[] fileContent = new byte[contentLength];
+            System.arraycopy(sectionData, contentStart, fileContent, 0, contentLength);
+
+            context.getLogger().log("Parsed multipart file: " + filename + ", type: " + fileContentType + ", size: " + fileContent.length);
+
+            return new FileUploadResult(fileContent, filename, fileContentType);
           }
         }
-        
-        if (filename != null && contentStart >= 0) {
-          // Extract file content
-          StringBuilder contentBuilder = new StringBuilder();
-          for (int i = contentStart; i < lines.length; i++) {
-            if (i > contentStart) {
-              contentBuilder.append("\r\n");
-            }
-            contentBuilder.append(lines[i]);
-          }
-          
-          String content = contentBuilder.toString();
-          // Remove trailing boundary marker if present
-          if (content.endsWith("\r\n--")) {
-            content = content.substring(0, content.length() - 4);
-          } else if (content.endsWith("--")) {
-            content = content.substring(0, content.length() - 2);
-          }
-          
-          byte[] fileContent = content.getBytes(StandardCharsets.ISO_8859_1);
-          context.getLogger().log("Parsed multipart file: " + filename + ", size: " + fileContent.length);
-          
-          return new FileUploadResult(fileContent, filename, fileContentType);
-        }
+
+        start = nextBoundaryIndex;
       }
+
+      throw new IllegalArgumentException("No file found in multipart data");
+
+    } catch (Exception e) {
+      context.getLogger().log("Error parsing multipart data: " + e.getMessage());
+      throw new IOException("Failed to parse multipart data", e);
     }
-    
-    throw new IllegalArgumentException("No file found in multipart data");
   }
   
+  // Helper method to find byte pattern in byte array
+  private int indexOf(byte[] data, byte[] pattern, int start) {
+    for (int i = start; i <= data.length - pattern.length; i++) {
+      boolean found = true;
+      for (int j = 0; j < pattern.length; j++) {
+        if (data[i + j] != pattern[j]) {
+          found = false;
+          break;
+        }
+      }
+      if (found) return i;
+    }
+    return -1;
+  }
+
   // Check if file is allowed based on extension
   private boolean isAllowedFile(String filename, String contentType) {
     if (filename == null) return false;
-    
+
     String lowerFilename = filename.toLowerCase();
     return ALLOWED_FILE_EXTENSIONS.stream().anyMatch(lowerFilename::endsWith) ||
-           (contentType != null && ALLOWED_CT.stream().anyMatch(allowed -> 
+           (contentType != null && ALLOWED_CT.stream().anyMatch(allowed ->
                contentType.toLowerCase().startsWith(allowed.toLowerCase())));
   }
 

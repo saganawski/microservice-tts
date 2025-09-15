@@ -1,30 +1,57 @@
 package com.myorg;
 
 import com.amazonaws.services.lambda.runtime.RequestHandler;
-import com.myorg.fileTransformation.creator.SimpleFileTransformFactory;
-import com.myorg.fileTransformation.product.TransformFile;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import software.amazon.awssdk.core.sync.ResponseTransformer;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectResponse;
-import software.amazon.awssdk.services.s3.model.PutObjectResponse;
+import org.apache.hc.client5.http.classic.methods.HttpGet;
+import org.apache.hc.client5.http.classic.methods.HttpPost;
+import org.apache.hc.client5.http.entity.mime.MultipartEntityBuilder;
+import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
+import org.apache.hc.client5.http.impl.classic.CloseableHttpResponse;
+import org.apache.hc.client5.http.impl.classic.HttpClients;
+import org.apache.hc.core5.http.ContentType;
+import org.apache.hc.core5.http.io.entity.EntityUtils;
+import org.apache.hc.core5.http.io.entity.StringEntity;
+import software.amazon.awssdk.core.sync.RequestBody;
+import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 
 public class TransformLambda implements RequestHandler<Map<String, Object>, String> {
         private static final String ORIGINAL_BUCKET_NAME = System.getenv("ORIGINAL_BUCKET_NAME");
-        private static final String CHUNK_BUCKET_NAME = System.getenv("CHUNK_BUCKET_NAME");
-        private static final int TOKEN_SIZE = 4096;
+        private static final String MARKDOWN_BUCKET_NAME = System.getenv("MARKDOWN_BUCKET_NAME");
+        private static final String MISTRAL_API_KEY = System.getenv("MISTRAL_API_KEY");
+        private static final String MISTRAL_BASE_URL = "https://api.mistral.ai/v1";
 
         private final S3Client s3Client = S3Client.builder().region(Region.US_EAST_1).build();
+        private final ObjectMapper objectMapper = new ObjectMapper();
+        private final CloseableHttpClient httpClient = HttpClients.createDefault();
 
         @Override
         public String handleRequest(Map<String, Object> event, com.amazonaws.services.lambda.runtime.Context context) {
-            context.getLogger().log("Initiating Transform lambda function");
+            context.getLogger().log("Initiating Transform lambda function with Mistral OCR processing");
             context.getLogger().log("Received event: " + event);
+
+            if (MISTRAL_API_KEY == null || MISTRAL_API_KEY.isEmpty()) {
+                context.getLogger().log("ERROR: MISTRAL_API_KEY environment variable is not set");
+                return "Error: Missing Mistral API key";
+            }
+
+            if (MARKDOWN_BUCKET_NAME == null || MARKDOWN_BUCKET_NAME.isEmpty()) {
+                context.getLogger().log("ERROR: MARKDOWN_BUCKET_NAME environment variable is not set");
+                return "Error: Missing markdown bucket name";
+            }
 
             // get the filename from the event
             final List<Map<String, Object>> records = (List<Map<String, Object>>) event.get("Records");
@@ -41,9 +68,59 @@ public class TransformLambda implements RequestHandler<Map<String, Object>, Stri
                 return "Invalid request: No file name found.";
             }
 
-            context.getLogger().log("File name: " + fileName);
+            context.getLogger().log("Processing file with OCR: " + fileName);
 
-            // download fhe file from original file bucket
+            try {
+                // Step 1: Download file from S3 and upload to Mistral for file hosting
+                final byte[] fileContent = downloadFileFromS3(fileName, context);
+                final String fileId = uploadFileToMistralAPI(fileName, fileContent, context);
+
+                if (fileId == null) {
+                    return "Error: Failed to upload file to Mistral API";
+                }
+
+                // Step 2: Get file URL for OCR processing
+                final String fileUrl = getFileUrlFromMistralAPI(fileId, 24, context);
+
+                if (fileUrl == null) {
+                    return "Error: Failed to retrieve file URL from Mistral API";
+                }
+
+                // Step 3: Process file with OCR
+                final JsonNode ocrResponse = processFileWithOCR(fileUrl, context);
+
+                if (ocrResponse == null) {
+                    return "Error: Failed to process file with OCR";
+                }
+
+                // Step 4: Extract and order markdown content
+                final String consolidatedMarkdown = extractAndOrderMarkdown(ocrResponse, context);
+
+                if (consolidatedMarkdown == null || consolidatedMarkdown.trim().isEmpty()) {
+                    return "Error: Failed to extract markdown content from OCR response";
+                }
+
+                // Step 5: Upload consolidated markdown to S3
+                final boolean uploadSuccessful = uploadMarkdownToS3(consolidatedMarkdown, fileName, context);
+
+                if (!uploadSuccessful) {
+                    return "Error: Failed to upload markdown file to S3";
+                }
+
+                String markdownFileName = generateMarkdownFileName(fileName);
+                context.getLogger().log("OCR processing completed successfully. Generated: " + markdownFileName);
+
+                return String.format("OCR processing completed successfully. Markdown file created: %s", markdownFileName);
+
+            } catch (Exception e) {
+                context.getLogger().log("ERROR processing file: " + e.getMessage());
+                return "Error: " + e.getMessage();
+            }
+        }
+
+        private byte[] downloadFileFromS3(String fileName, com.amazonaws.services.lambda.runtime.Context context) throws IOException {
+            context.getLogger().log("Downloading file from S3: " + fileName);
+
             final GetObjectRequest objectRequest = GetObjectRequest.builder()
                     .bucket(ORIGINAL_BUCKET_NAME)
                     .key(fileName)
@@ -53,28 +130,251 @@ public class TransformLambda implements RequestHandler<Map<String, Object>, Stri
             final GetObjectResponse s3Object = s3Client.getObject(objectRequest, ResponseTransformer.toOutputStream(outputStream));
 
             final boolean successful = s3Object.sdkHttpResponse().isSuccessful();
-            context.getLogger().log("Download successful: " + successful);
-            context.getLogger().log("did not upload for testing purposes ");
-            byte[] fileContent = outputStream.toByteArray();
+            context.getLogger().log("S3 download successful: " + successful);
 
-            // transform the file
-            final TransformFile transformFile = new SimpleFileTransformFactory().createTransformFile(fileName);
-            final String transformFileContent = transformFile.transformFileContent(fileContent);
-            final List<Map<String, byte[]>> fileContentToTokenSize = transformFile.transformFileContentToTokenSize(transformFileContent, TOKEN_SIZE, fileName);
+            if (!successful) {
+                throw new IOException("Failed to download file from S3");
+            }
 
-            fileContentToTokenSize.stream()
-                .filter(chunk -> chunk.keySet().stream().findFirst().isPresent())
-                .forEach(chunk -> {
-                    final String chunkFileName = chunk.keySet().stream().findFirst().get();
-                    final byte[] chunkContent = chunk.values().stream().findFirst().get();
+            return outputStream.toByteArray();
+        }
 
-                    final PutObjectResponse putObjectResponse = transformFile.uploadFileToS3(CHUNK_BUCKET_NAME, chunkFileName, chunkContent, s3Client);
-                    context.getLogger().log(chunkFileName +" : Successful upload ?: " + putObjectResponse.sdkHttpResponse().isSuccessful());
-                    //TODO: handle the case where the upload is not successful
-                });
+        private String uploadFileToMistralAPI(String fileName, byte[] fileContent, com.amazonaws.services.lambda.runtime.Context context) {
+            context.getLogger().log("Uploading file to Mistral API: " + fileName);
 
-            // TODO: return a more meaningful response
-            return "File has been transformed successfully";
+            try {
+                HttpPost uploadRequest = new HttpPost(MISTRAL_BASE_URL + "/files");
+                uploadRequest.setHeader("Authorization", "Bearer " + MISTRAL_API_KEY);
+
+                MultipartEntityBuilder builder = MultipartEntityBuilder.create();
+                builder.addTextBody("purpose", "ocr");
+                builder.addBinaryBody("file", fileContent, ContentType.APPLICATION_OCTET_STREAM, fileName);
+
+                uploadRequest.setEntity(builder.build());
+
+                try (CloseableHttpResponse response = httpClient.execute(uploadRequest)) {
+                    String responseBody = EntityUtils.toString(response.getEntity());
+                    context.getLogger().log("Mistral API upload response: " + responseBody);
+                    context.getLogger().log("Response status: " + response.getCode());
+
+                    if (response.getCode() == 200 || response.getCode() == 201) {
+                        JsonNode jsonResponse = objectMapper.readTree(responseBody);
+                        String fileId = jsonResponse.get("id").asText();
+                        context.getLogger().log("File uploaded successfully. File ID: " + fileId);
+                        return fileId;
+                    } else {
+                        context.getLogger().log("ERROR: Upload failed with status " + response.getCode());
+                        return null;
+                    }
+                }
+            } catch (Exception e) {
+                context.getLogger().log("ERROR uploading file to Mistral API: " + e.getMessage());
+                return null;
+            }
+        }
+
+        private String getFileUrlFromMistralAPI(String fileId, int expiryHours, com.amazonaws.services.lambda.runtime.Context context) {
+            context.getLogger().log("Retrieving file URL from Mistral API. File ID: " + fileId);
+
+            try {
+                HttpGet urlRequest = new HttpGet(MISTRAL_BASE_URL + "/files/" + fileId + "/url?expiry=" + expiryHours);
+                urlRequest.setHeader("Accept", "application/json");
+                urlRequest.setHeader("Authorization", "Bearer " + MISTRAL_API_KEY);
+
+                try (CloseableHttpResponse response = httpClient.execute(urlRequest)) {
+                    String responseBody = EntityUtils.toString(response.getEntity());
+                    context.getLogger().log("Mistral API URL response: " + responseBody);
+                    context.getLogger().log("Response status: " + response.getCode());
+
+                    if (response.getCode() == 200) {
+                        JsonNode jsonResponse = objectMapper.readTree(responseBody);
+                        String fileUrl = jsonResponse.get("url").asText();
+                        context.getLogger().log("File URL retrieved successfully: " + fileUrl);
+                        return fileUrl;
+                    } else {
+                        context.getLogger().log("ERROR: URL retrieval failed with status " + response.getCode());
+                        return null;
+                    }
+                }
+            } catch (Exception e) {
+                context.getLogger().log("ERROR retrieving file URL from Mistral API: " + e.getMessage());
+                return null;
+            }
+        }
+
+        private JsonNode processFileWithOCR(String fileUrl, com.amazonaws.services.lambda.runtime.Context context) {
+            context.getLogger().log("Processing file with OCR API. File URL: " + fileUrl);
+
+            try {
+                HttpPost ocrRequest = new HttpPost(MISTRAL_BASE_URL + "/ocr");
+                ocrRequest.setHeader("Authorization", "Bearer " + MISTRAL_API_KEY);
+                ocrRequest.setHeader("Content-Type", "application/json");
+
+                // Use Jackson to create properly formatted JSON to avoid encoding issues
+                String requestBody;
+                try {
+                    var requestMap = Map.of(
+                        "model", "mistral-ocr-latest",
+                        "document", Map.of(
+                            "type", "document_url",
+                            "document_url", fileUrl
+                        ),
+                        "include_image_base64", false
+                    );
+                    requestBody = objectMapper.writeValueAsString(requestMap);
+                } catch (Exception e) {
+                    context.getLogger().log("ERROR: Failed to create JSON request body: " + e.getMessage());
+                    return null;
+                }
+
+                context.getLogger().log("OCR request body: " + requestBody);
+                context.getLogger().log("File URL being used: " + fileUrl);
+
+                ocrRequest.setEntity(new StringEntity(requestBody, StandardCharsets.UTF_8));
+                ocrRequest.setHeader("Accept", "application/json");
+
+                try (CloseableHttpResponse response = httpClient.execute(ocrRequest)) {
+                    String responseBody = EntityUtils.toString(response.getEntity());
+                    context.getLogger().log("OCR API response status: " + response.getCode());
+                    context.getLogger().log("OCR API response: " + responseBody);
+
+                    if (response.getCode() == 200) {
+                        JsonNode jsonResponse = objectMapper.readTree(responseBody);
+                        context.getLogger().log("OCR processing successful");
+                        return jsonResponse;
+                    } else {
+                        context.getLogger().log("ERROR: OCR processing failed with status " + response.getCode());
+                        return null;
+                    }
+                }
+            } catch (Exception e) {
+                context.getLogger().log("ERROR processing file with OCR: " + e.getMessage());
+                return null;
+            }
+        }
+
+        private String extractAndOrderMarkdown(JsonNode ocrResponse, com.amazonaws.services.lambda.runtime.Context context) {
+            context.getLogger().log("Extracting and ordering markdown content from OCR response");
+
+            try {
+                List<MarkdownSegment> segments = new ArrayList<>();
+
+                // Check if response has 'pages' array
+                if (ocrResponse.has("pages") && ocrResponse.get("pages").isArray()) {
+                    JsonNode pages = ocrResponse.get("pages");
+                    context.getLogger().log("Found " + pages.size() + " pages in OCR response");
+
+                    for (JsonNode page : pages) {
+                        if (page.has("index") && page.has("markdown")) {
+                            int index = page.get("index").asInt();
+                            String markdown = page.get("markdown").asText();
+
+                            // Skip empty or minimal markdown content
+                            if (markdown != null && !markdown.trim().equals(".") && !markdown.trim().isEmpty()) {
+                                segments.add(new MarkdownSegment(index, markdown));
+                                context.getLogger().log("Extracted page " + index + " with " + markdown.length() + " characters");
+                            } else {
+                                context.getLogger().log("Skipping page " + index + " with minimal content: '" + markdown + "'");
+                            }
+                        }
+                    }
+                } else if (ocrResponse.isArray()) {
+                    // Fallback: direct array format
+                    for (JsonNode item : ocrResponse) {
+                        if (item.has("index") && item.has("markdown")) {
+                            int index = item.get("index").asInt();
+                            String markdown = item.get("markdown").asText();
+                            if (markdown != null && !markdown.trim().equals(".") && !markdown.trim().isEmpty()) {
+                                segments.add(new MarkdownSegment(index, markdown));
+                                context.getLogger().log("Extracted segment " + index + " with " + markdown.length() + " characters");
+                            }
+                        }
+                    }
+                } else {
+                    context.getLogger().log("ERROR: Expected 'pages' array or direct array response from OCR API");
+                    context.getLogger().log("Response structure: " + ocrResponse.toPrettyString());
+                    return null;
+                }
+
+                if (segments.isEmpty()) {
+                    context.getLogger().log("WARNING: No valid markdown segments found - all pages contained minimal content");
+                    return null;
+                }
+
+                segments.sort(Comparator.comparingInt(segment -> segment.index));
+                context.getLogger().log("Sorted " + segments.size() + " markdown segments by index");
+
+                StringBuilder consolidatedMarkdown = new StringBuilder();
+                for (MarkdownSegment segment : segments) {
+                    consolidatedMarkdown.append(segment.markdown);
+                    if (!segment.markdown.endsWith("\n")) {
+                        consolidatedMarkdown.append("\n");
+                    }
+                }
+
+                String result = consolidatedMarkdown.toString();
+                context.getLogger().log("Consolidated markdown content: " + result.length() + " total characters");
+                if (result.length() < 100) {
+                    context.getLogger().log("Short markdown content preview: " + result);
+                }
+                return result;
+
+            } catch (Exception e) {
+                context.getLogger().log("ERROR extracting markdown: " + e.getMessage());
+                return null;
+            }
+        }
+
+        private boolean uploadMarkdownToS3(String markdownContent, String originalFileName, com.amazonaws.services.lambda.runtime.Context context) {
+            context.getLogger().log("Uploading consolidated markdown to S3");
+
+            try {
+                String markdownFileName = generateMarkdownFileName(originalFileName);
+                context.getLogger().log("Generated markdown filename: " + markdownFileName);
+
+                PutObjectRequest putRequest = PutObjectRequest.builder()
+                        .bucket(MARKDOWN_BUCKET_NAME)
+                        .key(markdownFileName)
+                        .contentType("text/markdown")
+                        .build();
+
+                RequestBody requestBody = RequestBody.fromString(markdownContent);
+
+                var response = s3Client.putObject(putRequest, requestBody);
+
+                boolean successful = response.sdkHttpResponse().isSuccessful();
+                context.getLogger().log("Markdown upload successful: " + successful);
+
+                if (successful) {
+                    context.getLogger().log("Markdown file uploaded successfully: " + markdownFileName);
+                    context.getLogger().log("File size: " + markdownContent.length() + " characters");
+                }
+
+                return successful;
+
+            } catch (Exception e) {
+                context.getLogger().log("ERROR uploading markdown to S3: " + e.getMessage());
+                return false;
+            }
+        }
+
+        private String generateMarkdownFileName(String originalFileName) {
+            int lastDotIndex = originalFileName.lastIndexOf('.');
+            if (lastDotIndex > 0) {
+                return originalFileName.substring(0, lastDotIndex) + ".md";
+            } else {
+                return originalFileName + ".md";
+            }
+        }
+
+        private static class MarkdownSegment {
+            final int index;
+            final String markdown;
+
+            MarkdownSegment(int index, String markdown) {
+                this.index = index;
+                this.markdown = markdown;
+            }
         }
 
 }
