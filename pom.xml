@@ -9,6 +9,7 @@
     <modules>
         <module>lambdas/file-validation-lambda</module>
         <module>lambdas/file-transform-lambda</module>
+        <module>lambdas/chapter-splitter-lambda</module>
         <module>lambdas/file-tts-lambda</module>
         <module>lambdas/notification-lambda</module>
         <module>cdk</module>
