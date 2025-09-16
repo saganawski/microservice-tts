@@ -2,13 +2,11 @@ package com.myorg;
 
 import com.amazonaws.services.lambda.runtime.Context;
 import com.amazonaws.services.lambda.runtime.RequestHandler;
-//import com.fasterxml.jackson.databind.ObjectMapper;
+import com.myorg.tts.TtsConfig;
+import com.myorg.tts.TtsProvider;
+import com.myorg.tts.TtsProviderFactory;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
@@ -26,17 +24,16 @@ import software.amazon.awssdk.services.s3.model.PutObjectResponse;
 public class TtsLambda implements RequestHandler<Map<String, Object>, String> {
     private static final String MARKDOWN_BUCKET_NAME = System.getenv("MARKDOWN_BUCKET_NAME");
     private static final String PROCESSED_BUCKET_NAME = System.getenv("PROCESSED_BUCKET_NAME");
-    private static final String OPENAI_API_KEY = System.getenv("OPENAI_API_KEY");
     private static final int CHUNK_SIZE = 900;
 
     private final S3Client s3Client;
-    private final HttpClient httpClient;
-//    private final ObjectMapper objectMapper;
+    private final TtsProvider ttsProvider;
+    private final TtsConfig ttsConfig;
 
     public TtsLambda() {
         this.s3Client = S3Client.builder().build();
-        this.httpClient = HttpClient.newHttpClient();
-//        this.objectMapper = new ObjectMapper();
+        this.ttsProvider = TtsProviderFactory.createProvider();
+        this.ttsConfig = TtsProviderFactory.createDefaultConfig();
     }
 
     @Override
@@ -71,7 +68,9 @@ public class TtsLambda implements RequestHandler<Map<String, Object>, String> {
             context.getLogger().log("Split markdown into " + chunks.size() + " chunks of max " + CHUNK_SIZE + " characters each");
 
             // Process each chunk with TTS
-/*            List<String> audioFiles = new ArrayList<>();
+            List<String> audioFiles = new ArrayList<>();
+            context.getLogger().log("Using TTS provider: " + ttsProvider.getProviderName());
+
             for (int i = 0; i < chunks.size(); i++) {
                 String chunk = chunks.get(i);
                 context.getLogger().log("Processing chunk " + (i + 1) + "/" + chunks.size() + " (length: " + chunk.length() + ")");
@@ -79,7 +78,7 @@ public class TtsLambda implements RequestHandler<Map<String, Object>, String> {
                 // Check remaining time before API call
                 context.getLogger().log("Time remaining before TTS API call: " + context.getRemainingTimeInMillis() + "ms");
 
-                // Convert chunk to speech using OpenAI API
+                // Convert chunk to speech using configured TTS provider
                 byte[] audioData = convertTextToSpeech(chunk, context);
                 context.getLogger().log("Generated audio data for chunk " + (i + 1) + ", size: " + audioData.length + " bytes");
 
@@ -88,9 +87,8 @@ public class TtsLambda implements RequestHandler<Map<String, Object>, String> {
                 uploadAudioToS3(outputKey, audioData, context);
                 audioFiles.add(outputKey);
                 context.getLogger().log("Successfully uploaded audio file: " + outputKey);
-            }*/
-            String result = "Successfully processed " + chunks.size() + " chunks from markdown file. Generated Dummy test: " ;
-//            String result = "Successfully processed " + chunks.size() + " chunks from markdown file. Generated audio files: " + String.join(", ", audioFiles);
+            }
+            String result = "Successfully processed " + chunks.size() + " chunks from markdown file using " + ttsProvider.getProviderName() + " provider. Generated audio files: " + String.join(", ", audioFiles);
             context.getLogger().log(result);
             return result;
 
@@ -102,38 +100,15 @@ public class TtsLambda implements RequestHandler<Map<String, Object>, String> {
 
 
     private byte[] convertTextToSpeech(String textContent, Context context) throws IOException, InterruptedException {
-        context.getLogger().log("Converting text to speech using OpenAI API");
+        context.getLogger().log("Converting text to speech using " + ttsProvider.getProviderName() + " provider");
 
-        if (OPENAI_API_KEY == null || OPENAI_API_KEY.isEmpty()) {
-            throw new IllegalStateException("OPENAI_API_KEY environment variable is not set");
+        try {
+            // Use the configured TTS provider
+            return ttsProvider.convertTextToSpeech(textContent, ttsConfig);
+        } catch (Exception e) {
+            context.getLogger().log("TTS conversion error: " + e.getMessage());
+            throw e;
         }
-
-        // Create request body
-        String requestBody = String.format("""
-                {
-                    "model": "gpt-4o-mini-tts",
-                    "input": "%s",
-                    "voice": "alloy"
-                }
-                """, textContent.replace("\"", "\\\"").replace("\n", "\\n"));
-
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create("https://api.openai.com/v1/audio/speech"))
-                .header("Authorization", "Bearer " + OPENAI_API_KEY)
-                .header("Content-Type", "application/json")
-                .POST(HttpRequest.BodyPublishers.ofString(requestBody))
-                .build();
-
-        context.getLogger().log("Sending request to OpenAI TTS API");
-        HttpResponse<byte[]> response = httpClient.send(request, HttpResponse.BodyHandlers.ofByteArray());
-
-        if (response.statusCode() != 200) {
-            String errorBody = new String(response.body(), StandardCharsets.UTF_8);
-            context.getLogger().log("OpenAI API error: " + response.statusCode() + " - " + errorBody);
-            throw new RuntimeException("OpenAI API request failed: " + response.statusCode() + " - " + errorBody);
-        }
-
-        return response.body();
     }
 
     private String generateChunkOutputKey(String inputKey, int chunkIndex) {

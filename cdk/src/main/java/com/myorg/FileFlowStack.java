@@ -87,15 +87,55 @@ public class FileFlowStack extends Stack {
         markdownFileBucket.grantRead(chapterSplitterLambda);
         chaptersBucket.grantPut(chapterSplitterLambda);
 
-        // TTS lambda may need to switch to a python lambda
+        // TTS lambda with configurable provider support
+        Map<String, String> ttsEnvironment = new java.util.HashMap<>();
+        ttsEnvironment.put("MARKDOWN_BUCKET_NAME", chaptersBucket.getBucketName());
+        ttsEnvironment.put("PROCESSED_BUCKET_NAME", processedFileBucket.getBucketName());
+
+        // TTS Provider configuration
+        ttsEnvironment.put("TTS_PROVIDER", System.getenv("TTS_PROVIDER") != null ? System.getenv("TTS_PROVIDER") : "OPENAI");
+
+        // OpenAI configuration (when using OpenAI provider)
+        if (System.getenv("OPENAI_API_KEY") != null) {
+            ttsEnvironment.put("OPENAI_API_KEY", System.getenv("OPENAI_API_KEY"));
+        }
+
+        // Self-hosted TTS configuration (when using self-hosted provider)
+        if (System.getenv("TTS_ENDPOINT_URL") != null) {
+            ttsEnvironment.put("TTS_ENDPOINT_URL", System.getenv("TTS_ENDPOINT_URL"));
+        }
+        if (System.getenv("TTS_API_KEY") != null) {
+            ttsEnvironment.put("TTS_API_KEY", System.getenv("TTS_API_KEY"));
+        }
+        if (System.getenv("TTS_AUTH_HEADER") != null) {
+            ttsEnvironment.put("TTS_AUTH_HEADER", System.getenv("TTS_AUTH_HEADER"));
+        }
+
+        // Generic TTS configuration
+        if (System.getenv("TTS_VOICE") != null) {
+            ttsEnvironment.put("TTS_VOICE", System.getenv("TTS_VOICE"));
+        }
+        if (System.getenv("TTS_MODEL") != null) {
+            ttsEnvironment.put("TTS_MODEL", System.getenv("TTS_MODEL"));
+        }
+        if (System.getenv("TTS_SPEED") != null) {
+            ttsEnvironment.put("TTS_SPEED", System.getenv("TTS_SPEED"));
+        }
+        if (System.getenv("TTS_LANGUAGE") != null) {
+            ttsEnvironment.put("TTS_LANGUAGE", System.getenv("TTS_LANGUAGE"));
+        }
+        if (System.getenv("TTS_INSTRUCTIONS") != null) {
+            ttsEnvironment.put("TTS_INSTRUCTIONS", System.getenv("TTS_INSTRUCTIONS"));
+        }
+        if (System.getenv("TTS_RESPONSE_FORMAT") != null) {
+            ttsEnvironment.put("TTS_RESPONSE_FORMAT", System.getenv("TTS_RESPONSE_FORMAT"));
+        }
+
         final Function ttsLambda = Function.Builder.create(this, "TTSLambda")
                 .runtime(Runtime.JAVA_21)
                 .code(Code.fromAsset("lambdas/file-tts-lambda/target/file-tts-lambda.jar"))
                 .handler("com.myorg.TtsLambda::handleRequest")
-                .environment(Map.of(
-                        "CHAPTERS_BUCKET_NAME", chaptersBucket.getBucketName(),
-                        "PROCESSED_BUCKET_NAME", processedFileBucket.getBucketName(),
-                        "OPENAI_API_KEY", System.getenv("OPENAI_API_KEY")))
+                .environment(ttsEnvironment)
                 .timeout(Duration.minutes(15))
                 .memorySize(1024)
                 .build();
