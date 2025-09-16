@@ -42,6 +42,7 @@ public class ApiStack extends Stack {
                 .restApiName("FileProcessingApi")
                 .description("This service serves as and entry point for users to upload files.")
                 .binaryMediaTypes(List.of(
+                        "multipart/form-data", // For file uploads via forms
                         "application/pdf",
                         "application/epub+zip", // EPUB
                         "text/plain"

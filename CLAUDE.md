@@ -12,11 +12,11 @@ The system consists of two main CDK stacks:
 
 ### FileFlowStack
 - **OriginalFileBucket**: Stores uploaded files (PDF/TXT)
-- **ChunkFileBucket**: Stores text chunks split from original files  
+- **MarkdownFileBucket**: Stores consolidated markdown files from OCR processing  
 - **ProcessedFileBucket**: Stores final audio files
 - **ValidationLambda**: Validates file uploads and stores in OriginalFileBucket
-- **TransformLambda**: Downloads files from OriginalFileBucket, splits into 4096-char chunks for TTS API limits
-- **TTSLambda**: Converts text chunks to audio (placeholder implementation)
+- **TransformLambda**: Downloads files from OriginalFileBucket, processes with Mistral OCR, generates consolidated markdown files
+- **TTSLambda**: Downloads markdown files, chunks them into 900-character segments, converts to audio using OpenAI TTS
 
 ### ApiStack  
 - **REST API**: Provides `/file-upload` POST endpoint
@@ -26,7 +26,7 @@ The system consists of two main CDK stacks:
 ## Lambda Flow
 1. File uploaded via API Gateway → ValidationLambda
 2. File stored in OriginalFileBucket → triggers TransformLambda  
-3. Chunks stored in ChunkFileBucket → triggers TTSLambda
+3. Markdown file stored in MarkdownFileBucket → triggers TTSLambda
 4. Audio files stored in ProcessedFileBucket
 
 ## Development Commands

@@ -10,7 +10,6 @@ import software.amazon.awscdk.services.s3.Bucket;
 import software.amazon.awscdk.services.s3.EventType;
 import software.amazon.awscdk.services.s3.notifications.LambdaDestination;
 import software.constructs.Construct;
-import software.amazon.awscdk.Duration;
 
 import java.util.Map;
 
@@ -24,15 +23,18 @@ public class FileFlowStack extends Stack {
 
         final String accountNumber = "272765753210";
 
-        // TODO: bucket names
-
         final Bucket originalFileBucket = Bucket.Builder.create(this, "OriginalFileBucket")
                 .bucketName("original-file-bucket" + accountNumber)
                 .versioned(false)
                 .build();
 
-        final Bucket chunkFileBucket = Bucket.Builder.create(this, "ChunkFileBucket")
-                .bucketName("chunk-file-bucket" + accountNumber)
+        final Bucket markdownFileBucket = Bucket.Builder.create(this, "MarkdownFileBucket")
+                .bucketName("markdown-file-bucket" + accountNumber)
+                .versioned(false)
+                .build();
+
+        final Bucket chaptersBucket = Bucket.Builder.create(this, "ChaptersBucket")
+                .bucketName("chapters-bucket" + accountNumber)
                 .versioned(false)
                 .build();
 
@@ -47,7 +49,8 @@ public class FileFlowStack extends Stack {
                 .handler("com.myorg.FileValidationLambda::handleRequest")
                 .environment(Map.of(
                         "ORIGINAL_BUCKET_NAME", originalFileBucket.getBucketName()))
-                .timeout(Duration.minutes(5))
+                .timeout(Duration.minutes(15))
+                .memorySize(1024)
                 .build();
 
         // Grant permissions to the lambda functions to access the S3 buckets
@@ -59,13 +62,30 @@ public class FileFlowStack extends Stack {
                 .handler("com.myorg.TransformLambda::handleRequest")
                 .environment(Map.of(
                         "ORIGINAL_BUCKET_NAME", originalFileBucket.getBucketName(),
-                        "CHUNK_BUCKET_NAME", chunkFileBucket.getBucketName()))
+                        "MARKDOWN_BUCKET_NAME", markdownFileBucket.getBucketName(),
+                        "MISTRAL_API_KEY", System.getenv("MISTRAL_API_KEY")))
                 .timeout(Duration.minutes(5))
                 .build();
 
         // Grant permissions to the lambda functions to access the S3 buckets
         originalFileBucket.grantRead(transformLambda);
-        chunkFileBucket.grantPut(transformLambda);
+        markdownFileBucket.grantPut(transformLambda);
+
+        // Chapter Splitter Lambda
+        final Function chapterSplitterLambda = Function.Builder.create(this, "ChapterSplitterLambda")
+                .runtime(Runtime.JAVA_21)
+                .code(Code.fromAsset("lambdas/chapter-splitter-lambda/target/chapter-splitter-lambda.jar"))
+                .handler("com.myorg.ChapterSplitterLambda::handleRequest")
+                .environment(Map.of(
+                        "MARKDOWN_BUCKET_NAME", markdownFileBucket.getBucketName(),
+                        "CHAPTERS_BUCKET_NAME", chaptersBucket.getBucketName()))
+                .timeout(Duration.minutes(5))
+                .memorySize(512)
+                .build();
+
+        // Grant permissions for ChapterSplitter Lambda
+        markdownFileBucket.grantRead(chapterSplitterLambda);
+        chaptersBucket.grantPut(chapterSplitterLambda);
 
         // TTS lambda may need to switch to a python lambda
         final Function ttsLambda = Function.Builder.create(this, "TTSLambda")
@@ -73,7 +93,7 @@ public class FileFlowStack extends Stack {
                 .code(Code.fromAsset("lambdas/file-tts-lambda/target/file-tts-lambda.jar"))
                 .handler("com.myorg.TtsLambda::handleRequest")
                 .environment(Map.of(
-                        "CHUNK_BUCKET_NAME", chunkFileBucket.getBucketName(),
+                        "CHAPTERS_BUCKET_NAME", chaptersBucket.getBucketName(),
                         "PROCESSED_BUCKET_NAME", processedFileBucket.getBucketName(),
                         "OPENAI_API_KEY", System.getenv("OPENAI_API_KEY")))
                 .timeout(Duration.minutes(15))
@@ -81,12 +101,13 @@ public class FileFlowStack extends Stack {
                 .build();
 
         // Grant permissions to the lambda functions to access the S3 buckets
-        chunkFileBucket.grantRead(ttsLambda);
+        chaptersBucket.grantRead(ttsLambda);
         processedFileBucket.grantPut(ttsLambda);
 
         // add the S3 event notification
         originalFileBucket.addEventNotification(EventType.OBJECT_CREATED, new LambdaDestination(transformLambda));
-        chunkFileBucket.addEventNotification(EventType.OBJECT_CREATED, new LambdaDestination(ttsLambda));
+        markdownFileBucket.addEventNotification(EventType.OBJECT_CREATED, new LambdaDestination(chapterSplitterLambda));
+        chaptersBucket.addEventNotification(EventType.OBJECT_CREATED, new LambdaDestination(ttsLambda));
     }
 
     public Function getValidationLambda() {

@@ -8,11 +8,11 @@ The system consists of two main CDK stacks that create a fully managed serverles
 
 ### FileFlowStack
 - **OriginalFileBucket**: Stores uploaded files (PDF/TXT/EPUB)
-- **ChunkFileBucket**: Stores text chunks split from original files for TTS processing
+- **MarkdownFileBucket**: Stores consolidated markdown files from OCR processing for TTS processing
 - **ProcessedFileBucket**: Stores final audio files
 - **ValidationLambda**: Validates file uploads and stores in OriginalFileBucket
-- **TransformLambda**: Downloads files, splits into 4096-character chunks for TTS API limits
-- **TTSLambda**: Converts text chunks to audio files
+- **TransformLambda**: Downloads files, processes with Mistral OCR, generates consolidated markdown files
+- **TTSLambda**: Downloads markdown files, chunks them into 900-character segments, converts to audio using OpenAI TTS
 
 ### ApiStack
 - **REST API**: Provides `/file-upload` POST endpoint via API Gateway
@@ -23,8 +23,8 @@ The system consists of two main CDK stacks that create a fully managed serverles
 
 1. **File Upload** → API Gateway receives file via `/file-upload` endpoint
 2. **Validation** → ValidationLambda validates file type and stores in OriginalFileBucket
-3. **Transformation** → S3 event triggers TransformLambda to chunk file into 4096-char segments
-4. **TTS Processing** → ChunkFileBucket events trigger TTSLambda to convert text to audio
+3. **Transformation** → S3 event triggers TransformLambda to process file with OCR and generate markdown
+4. **TTS Processing** → MarkdownFileBucket events trigger TTSLambda to chunk and convert text to audio
 5. **Storage** → Final audio files stored in ProcessedFileBucket
 
 ## 📁 Project Structure
@@ -38,7 +38,7 @@ microservice-tts/
 │       └── ApiStack.java         # API Gateway configuration
 ├── lambdas/                      # Lambda function implementations
 │   ├── file-validation-lambda/   # File upload validation and storage
-│   ├── file-transform-lambda/    # Text extraction and chunking
+│   ├── file-transform-lambda/    # OCR processing and markdown generation
 │   ├── file-tts-lambda/         # Text-to-speech conversion
 │   └── notification-lambda/      # (Not currently integrated)
 ├── pom.xml                      # Root Maven configuration
@@ -146,7 +146,7 @@ cdk destroy --all
 - Account Number: Hardcoded as `272765753210` in bucket naming
 
 ### TTS Configuration
-- **Chunk Limit**: 4096 characters per chunk (OpenAI TTS API requirement)
+- **Chunk Limit**: 900 characters per chunk for TTS processing
 - **Lambda Timeout**: 5 minutes for all functions
 - **Memory**: Configured per lambda function requirements
 
@@ -154,8 +154,8 @@ cdk destroy --all
 
 - ✅ **ValidationLambda**: Complete file upload and validation
 - ✅ **API Gateway**: REST endpoint with proper error handling
-- 🚧 **TransformLambda**: File download implemented, chunking in progress
-- 🚧 **TTSLambda**: Placeholder implementation
+- ✅ **TransformLambda**: OCR processing and markdown generation complete
+- ✅ **TTSLambda**: Markdown chunking and OpenAI TTS conversion complete
 - ❓ **NotificationLambda**: Exists but not integrated
 
 ## 🔍 Monitoring and Logging
