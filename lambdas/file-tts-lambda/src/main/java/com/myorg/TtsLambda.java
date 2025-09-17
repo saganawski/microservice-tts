@@ -2,13 +2,13 @@ package com.myorg;
 
 import com.amazonaws.services.lambda.runtime.Context;
 import com.amazonaws.services.lambda.runtime.RequestHandler;
-//import com.fasterxml.jackson.databind.ObjectMapper;
+import com.myorg.audio.PcmToWavConverter;
+import com.myorg.audio.WavConcatenator;
+import com.myorg.tts.TtsConfig;
+import com.myorg.tts.TtsProvider;
+import com.myorg.tts.TtsProviderFactory;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
@@ -26,17 +26,16 @@ import software.amazon.awssdk.services.s3.model.PutObjectResponse;
 public class TtsLambda implements RequestHandler<Map<String, Object>, String> {
     private static final String MARKDOWN_BUCKET_NAME = System.getenv("MARKDOWN_BUCKET_NAME");
     private static final String PROCESSED_BUCKET_NAME = System.getenv("PROCESSED_BUCKET_NAME");
-    private static final String OPENAI_API_KEY = System.getenv("OPENAI_API_KEY");
     private static final int CHUNK_SIZE = 900;
 
     private final S3Client s3Client;
-    private final HttpClient httpClient;
-//    private final ObjectMapper objectMapper;
+    private final TtsProvider ttsProvider;
+    private final TtsConfig ttsConfig;
 
     public TtsLambda() {
         this.s3Client = S3Client.builder().build();
-        this.httpClient = HttpClient.newHttpClient();
-//        this.objectMapper = new ObjectMapper();
+        this.ttsProvider = TtsProviderFactory.createProvider();
+        this.ttsConfig = TtsProviderFactory.createDefaultConfig();
     }
 
     @Override
@@ -60,7 +59,22 @@ public class TtsLambda implements RequestHandler<Map<String, Object>, String> {
             String bucketName = extractBucketName(event);
             String objectKey = extractObjectKey(event);
 
-            context.getLogger().log("Processing markdown file: " + objectKey + " from bucket: " + bucketName);
+            context.getLogger().log("Processing file: " + objectKey + " from bucket: " + bucketName);
+
+            // Check if this is a metadata.json file - if so, copy it directly to processed bucket
+            if (objectKey.endsWith("metadata.json")) {
+                context.getLogger().log("Detected metadata.json file, copying directly to processed bucket without TTS conversion");
+                copyMetadataToProcessedBucket(bucketName, objectKey, context);
+                String result = "Successfully copied metadata.json to processed bucket: " + objectKey;
+                context.getLogger().log(result);
+                return result;
+            }
+            //TODO: think if this is needed
+            // Check if this is a markdown file
+            if (!objectKey.endsWith(".md")) {
+                context.getLogger().log("Skipping non-markdown file: " + objectKey);
+                return "Skipped non-markdown file: " + objectKey;
+            }
 
             // Download markdown file from S3
             String markdownContent = downloadMarkdownFromS3(bucketName, objectKey, context);
@@ -70,8 +84,11 @@ public class TtsLambda implements RequestHandler<Map<String, Object>, String> {
             List<String> chunks = chunkMarkdownContent(markdownContent, context);
             context.getLogger().log("Split markdown into " + chunks.size() + " chunks of max " + CHUNK_SIZE + " characters each");
 
-            // Process each chunk with TTS
-/*            List<String> audioFiles = new ArrayList<>();
+            // Process each chunk with TTS and collect WAV data
+            List<byte[]> wavChunks = new ArrayList<>();
+            context.getLogger().log("Using TTS provider: " + ttsProvider.getProviderName());
+            context.getLogger().log("Response format: " + ttsConfig.getResponseFormat());
+
             for (int i = 0; i < chunks.size(); i++) {
                 String chunk = chunks.get(i);
                 context.getLogger().log("Processing chunk " + (i + 1) + "/" + chunks.size() + " (length: " + chunk.length() + ")");
@@ -79,18 +96,82 @@ public class TtsLambda implements RequestHandler<Map<String, Object>, String> {
                 // Check remaining time before API call
                 context.getLogger().log("Time remaining before TTS API call: " + context.getRemainingTimeInMillis() + "ms");
 
-                // Convert chunk to speech using OpenAI API
+                // Convert chunk to speech using configured TTS provider
                 byte[] audioData = convertTextToSpeech(chunk, context);
                 context.getLogger().log("Generated audio data for chunk " + (i + 1) + ", size: " + audioData.length + " bytes");
 
-                // Upload MP3 to processed bucket
-                String outputKey = generateChunkOutputKey(objectKey, i);
-                uploadAudioToS3(outputKey, audioData, context);
-                audioFiles.add(outputKey);
-                context.getLogger().log("Successfully uploaded audio file: " + outputKey);
-            }*/
-            String result = "Successfully processed " + chunks.size() + " chunks from markdown file. Generated Dummy test: " ;
-//            String result = "Successfully processed " + chunks.size() + " chunks from markdown file. Generated audio files: " + String.join(", ", audioFiles);
+                // Check if the data is PCM instead of WAV
+                byte[] wavData;
+                if (PcmToWavConverter.isPcmData(audioData)) {
+                    context.getLogger().log("Detected raw PCM data for chunk " + (i + 1) + ", converting to WAV format");
+                    try {
+                        // Convert PCM to WAV (assuming 24kHz mono 16-bit, which is standard for TTS)
+                        wavData = PcmToWavConverter.pcmToWavDefault(audioData);
+                        context.getLogger().log("Converted PCM to WAV, new size: " + wavData.length + " bytes");
+                    } catch (IOException e) {
+                        context.getLogger().log("Failed to convert PCM to WAV: " + e.getMessage());
+                        wavData = audioData; // Use as-is and hope for the best
+                    }
+                } else {
+                    wavData = audioData;
+                    // Debug: Log WAV header for validation
+                    if (wavData.length >= 44) {
+                        StringBuilder headerInfo = new StringBuilder();
+                        headerInfo.append("Chunk ").append(i + 1).append(" WAV header: ");
+
+                        // RIFF header
+                        String riff = new String(wavData, 0, 4);
+                        headerInfo.append("RIFF='").append(riff).append("' ");
+
+                        // File size
+                        int fileSize = ((wavData[4] & 0xFF) |
+                                       ((wavData[5] & 0xFF) << 8) |
+                                       ((wavData[6] & 0xFF) << 16) |
+                                       ((wavData[7] & 0xFF) << 24));
+                        headerInfo.append("Size=").append(fileSize).append(" ");
+
+                        // WAVE format
+                        String wave = new String(wavData, 8, 4);
+                        headerInfo.append("WAVE='").append(wave).append("' ");
+
+                        context.getLogger().log(headerInfo.toString());
+
+                        // Validate WAV header
+                        if (!riff.equals("RIFF") || !wave.equals("WAVE")) {
+                            context.getLogger().log("WARNING: Invalid WAV header detected!");
+                        }
+                    }
+                }
+
+                wavChunks.add(wavData);
+            }
+
+            // Concatenate all WAV chunks with crossfading
+            context.getLogger().log("Concatenating " + wavChunks.size() + " WAV chunks with crossfading");
+            byte[] concatenatedWav;
+            try {
+                concatenatedWav = WavConcatenator.concatenateWithCrossfade(wavChunks);
+                context.getLogger().log("Concatenated WAV size: " + concatenatedWav.length + " bytes");
+            } catch (Exception e) {
+                context.getLogger().log("Error during concatenation: " + e.getMessage());
+                context.getLogger().log("Stack trace: " + java.util.Arrays.toString(e.getStackTrace()));
+                // If concatenation fails, try to at least save the first chunk
+                if (!wavChunks.isEmpty()) {
+                    context.getLogger().log("Falling back to first chunk only");
+                    concatenatedWav = wavChunks.get(0);
+                } else {
+                    throw e;
+                }
+            }
+
+            // Generate output key for the complete audio file
+            String outputKey = generateOutputKey(objectKey);
+
+            // Upload concatenated WAV to processed bucket
+            uploadAudioToS3(outputKey, concatenatedWav, context);
+
+            String result = "Successfully processed " + chunks.size() + " chunks from markdown file using " +
+                          ttsProvider.getProviderName() + " provider. Generated concatenated audio file: " + outputKey;
             context.getLogger().log(result);
             return result;
 
@@ -102,44 +183,54 @@ public class TtsLambda implements RequestHandler<Map<String, Object>, String> {
 
 
     private byte[] convertTextToSpeech(String textContent, Context context) throws IOException, InterruptedException {
-        context.getLogger().log("Converting text to speech using OpenAI API");
+        context.getLogger().log("Converting text to speech using " + ttsProvider.getProviderName() + " provider");
 
-        if (OPENAI_API_KEY == null || OPENAI_API_KEY.isEmpty()) {
-            throw new IllegalStateException("OPENAI_API_KEY environment variable is not set");
+        try {
+            // Use the configured TTS provider
+            return ttsProvider.convertTextToSpeech(textContent, ttsConfig);
+        } catch (Exception e) {
+            context.getLogger().log("TTS conversion error: " + e.getMessage());
+            throw e;
         }
-
-        // Create request body
-        String requestBody = String.format("""
-                {
-                    "model": "gpt-4o-mini-tts",
-                    "input": "%s",
-                    "voice": "alloy"
-                }
-                """, textContent.replace("\"", "\\\"").replace("\n", "\\n"));
-
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create("https://api.openai.com/v1/audio/speech"))
-                .header("Authorization", "Bearer " + OPENAI_API_KEY)
-                .header("Content-Type", "application/json")
-                .POST(HttpRequest.BodyPublishers.ofString(requestBody))
-                .build();
-
-        context.getLogger().log("Sending request to OpenAI TTS API");
-        HttpResponse<byte[]> response = httpClient.send(request, HttpResponse.BodyHandlers.ofByteArray());
-
-        if (response.statusCode() != 200) {
-            String errorBody = new String(response.body(), StandardCharsets.UTF_8);
-            context.getLogger().log("OpenAI API error: " + response.statusCode() + " - " + errorBody);
-            throw new RuntimeException("OpenAI API request failed: " + response.statusCode() + " - " + errorBody);
-        }
-
-        return response.body();
     }
 
-    private String generateChunkOutputKey(String inputKey, int chunkIndex) {
-        // Remove .md extension and add chunk index and .mp3
+    private String generateOutputKey(String inputKey) {
+        // Remove .md extension and add .wav extension
         String baseName = inputKey.replaceAll("\\.md$", "");
-        return String.format("%s_chunk_%03d.mp3", baseName, chunkIndex + 1);
+        return baseName + ".wav";
+    }
+
+    private void copyMetadataToProcessedBucket(String sourceBucket, String objectKey, Context context) {
+        context.getLogger().log("Copying metadata.json from " + sourceBucket + "/" + objectKey + " to " + PROCESSED_BUCKET_NAME);
+
+        try {
+            // Download the metadata file
+            GetObjectRequest getObjectRequest = GetObjectRequest.builder()
+                    .bucket(sourceBucket)
+                    .key(objectKey)
+                    .build();
+
+            ResponseBytes<GetObjectResponse> objectBytes = s3Client.getObjectAsBytes(getObjectRequest);
+            byte[] metadataContent = objectBytes.asByteArray();
+
+            // Upload to processed bucket with same key structure
+            PutObjectRequest putObjectRequest = PutObjectRequest.builder()
+                    .bucket(PROCESSED_BUCKET_NAME)
+                    .key(objectKey)
+                    .contentType("application/json")
+                    .contentLength((long) metadataContent.length)
+                    .build();
+
+            PutObjectResponse putObjectResponse = s3Client.putObject(putObjectRequest,
+                    RequestBody.fromInputStream(new ByteArrayInputStream(metadataContent), metadataContent.length));
+
+            context.getLogger().log("Successfully copied metadata.json to processed bucket");
+            context.getLogger().log("ETag: " + putObjectResponse.eTag());
+
+        } catch (Exception e) {
+            context.getLogger().log("ERROR copying metadata.json: " + e.getMessage());
+            throw new RuntimeException("Failed to copy metadata.json to processed bucket", e);
+        }
     }
 
     private void uploadAudioToS3(String objectKey, byte[] audioData, Context context) {
@@ -165,7 +256,7 @@ public class TtsLambda implements RequestHandler<Map<String, Object>, String> {
             PutObjectRequest putObjectRequest = PutObjectRequest.builder()
                     .bucket(PROCESSED_BUCKET_NAME)
                     .key(objectKey)
-                    .contentType("audio/mpeg")
+                    .contentType("audio/wav")
                     .contentLength((long) audioData.length)
                     .build();
             
