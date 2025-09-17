@@ -18,7 +18,7 @@ public class TtsConfig {
         this.speed = 1.0;
         this.language = "en";
         this.instructions = null;
-        this.responseFormat = "mp3";
+        this.responseFormat = "wav";
     }
 
     // Builder pattern for flexible configuration
@@ -28,7 +28,7 @@ public class TtsConfig {
         private double speed = 1.0;
         private String language = "en";
         private String instructions = null;
-        private String responseFormat = "mp3";
+        private String responseFormat = "wav";
 
         public Builder withVoice(String voice) {
             this.voice = voice;

@@ -90,6 +90,7 @@ public class SelfHostedTtsProvider implements TtsProvider {
     private String buildRequestBody(String text, TtsConfig config) {
         // Generic JSON format that can work with many TTS services
         // Specific implementations might need to override this
+        String format = config.getResponseFormat() != null ? config.getResponseFormat() : "wav";
         return String.format("""
                 {
                     "text": "%s",
@@ -97,7 +98,7 @@ public class SelfHostedTtsProvider implements TtsProvider {
                     "language": "%s",
                     "speed": %.1f,
                     "model": "%s",
-                    "format": "mp3",
+                    "format": "%s",
                     "sample_rate": 24000
                 }
                 """,
@@ -105,7 +106,8 @@ public class SelfHostedTtsProvider implements TtsProvider {
                 config.getVoice(),
                 config.getLanguage(),
                 config.getSpeed(),
-                config.getModel()
+                config.getModel(),
+                format
         );
     }
 

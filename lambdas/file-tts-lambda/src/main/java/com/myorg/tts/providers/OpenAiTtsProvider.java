@@ -50,7 +50,13 @@ public class OpenAiTtsProvider implements TtsProvider {
         // Response format (optional, only add if not default mp3)
         if (config.getResponseFormat() != null && !config.getResponseFormat().equals("mp3")) {
             requestBodyBuilder.append(",\n");
-            requestBodyBuilder.append(String.format("    \"response_format\": \"%s\"", config.getResponseFormat()));
+            // OpenAI may interpret "wav" as "pcm", so let's be explicit
+            String format = config.getResponseFormat();
+            if (format.equals("wav")) {
+                // Try pcm format instead, as OpenAI might return raw PCM when asked for WAV
+                format = "pcm";
+            }
+            requestBodyBuilder.append(String.format("    \"response_format\": \"%s\"", format));
         }
 
         // Instructions (optional, only add if provided)

@@ -2,6 +2,8 @@ package com.myorg;
 
 import com.amazonaws.services.lambda.runtime.Context;
 import com.amazonaws.services.lambda.runtime.RequestHandler;
+import com.myorg.audio.PcmToWavConverter;
+import com.myorg.audio.WavConcatenator;
 import com.myorg.tts.TtsConfig;
 import com.myorg.tts.TtsProvider;
 import com.myorg.tts.TtsProviderFactory;
@@ -67,7 +69,7 @@ public class TtsLambda implements RequestHandler<Map<String, Object>, String> {
                 context.getLogger().log(result);
                 return result;
             }
-
+            //TODO: think if this is needed
             // Check if this is a markdown file
             if (!objectKey.endsWith(".md")) {
                 context.getLogger().log("Skipping non-markdown file: " + objectKey);
@@ -82,9 +84,10 @@ public class TtsLambda implements RequestHandler<Map<String, Object>, String> {
             List<String> chunks = chunkMarkdownContent(markdownContent, context);
             context.getLogger().log("Split markdown into " + chunks.size() + " chunks of max " + CHUNK_SIZE + " characters each");
 
-            // Process each chunk with TTS
-            List<String> audioFiles = new ArrayList<>();
+            // Process each chunk with TTS and collect WAV data
+            List<byte[]> wavChunks = new ArrayList<>();
             context.getLogger().log("Using TTS provider: " + ttsProvider.getProviderName());
+            context.getLogger().log("Response format: " + ttsConfig.getResponseFormat());
 
             for (int i = 0; i < chunks.size(); i++) {
                 String chunk = chunks.get(i);
@@ -97,13 +100,78 @@ public class TtsLambda implements RequestHandler<Map<String, Object>, String> {
                 byte[] audioData = convertTextToSpeech(chunk, context);
                 context.getLogger().log("Generated audio data for chunk " + (i + 1) + ", size: " + audioData.length + " bytes");
 
-                // Upload MP3 to processed bucket
-                String outputKey = generateChunkOutputKey(objectKey, i);
-                uploadAudioToS3(outputKey, audioData, context);
-                audioFiles.add(outputKey);
-                context.getLogger().log("Successfully uploaded audio file: " + outputKey);
+                // Check if the data is PCM instead of WAV
+                byte[] wavData;
+                if (PcmToWavConverter.isPcmData(audioData)) {
+                    context.getLogger().log("Detected raw PCM data for chunk " + (i + 1) + ", converting to WAV format");
+                    try {
+                        // Convert PCM to WAV (assuming 24kHz mono 16-bit, which is standard for TTS)
+                        wavData = PcmToWavConverter.pcmToWavDefault(audioData);
+                        context.getLogger().log("Converted PCM to WAV, new size: " + wavData.length + " bytes");
+                    } catch (IOException e) {
+                        context.getLogger().log("Failed to convert PCM to WAV: " + e.getMessage());
+                        wavData = audioData; // Use as-is and hope for the best
+                    }
+                } else {
+                    wavData = audioData;
+                    // Debug: Log WAV header for validation
+                    if (wavData.length >= 44) {
+                        StringBuilder headerInfo = new StringBuilder();
+                        headerInfo.append("Chunk ").append(i + 1).append(" WAV header: ");
+
+                        // RIFF header
+                        String riff = new String(wavData, 0, 4);
+                        headerInfo.append("RIFF='").append(riff).append("' ");
+
+                        // File size
+                        int fileSize = ((wavData[4] & 0xFF) |
+                                       ((wavData[5] & 0xFF) << 8) |
+                                       ((wavData[6] & 0xFF) << 16) |
+                                       ((wavData[7] & 0xFF) << 24));
+                        headerInfo.append("Size=").append(fileSize).append(" ");
+
+                        // WAVE format
+                        String wave = new String(wavData, 8, 4);
+                        headerInfo.append("WAVE='").append(wave).append("' ");
+
+                        context.getLogger().log(headerInfo.toString());
+
+                        // Validate WAV header
+                        if (!riff.equals("RIFF") || !wave.equals("WAVE")) {
+                            context.getLogger().log("WARNING: Invalid WAV header detected!");
+                        }
+                    }
+                }
+
+                wavChunks.add(wavData);
             }
-            String result = "Successfully processed " + chunks.size() + " chunks from markdown file using " + ttsProvider.getProviderName() + " provider. Generated audio files: " + String.join(", ", audioFiles);
+
+            // Concatenate all WAV chunks with crossfading
+            context.getLogger().log("Concatenating " + wavChunks.size() + " WAV chunks with crossfading");
+            byte[] concatenatedWav;
+            try {
+                concatenatedWav = WavConcatenator.concatenateWithCrossfade(wavChunks);
+                context.getLogger().log("Concatenated WAV size: " + concatenatedWav.length + " bytes");
+            } catch (Exception e) {
+                context.getLogger().log("Error during concatenation: " + e.getMessage());
+                context.getLogger().log("Stack trace: " + java.util.Arrays.toString(e.getStackTrace()));
+                // If concatenation fails, try to at least save the first chunk
+                if (!wavChunks.isEmpty()) {
+                    context.getLogger().log("Falling back to first chunk only");
+                    concatenatedWav = wavChunks.get(0);
+                } else {
+                    throw e;
+                }
+            }
+
+            // Generate output key for the complete audio file
+            String outputKey = generateOutputKey(objectKey);
+
+            // Upload concatenated WAV to processed bucket
+            uploadAudioToS3(outputKey, concatenatedWav, context);
+
+            String result = "Successfully processed " + chunks.size() + " chunks from markdown file using " +
+                          ttsProvider.getProviderName() + " provider. Generated concatenated audio file: " + outputKey;
             context.getLogger().log(result);
             return result;
 
@@ -126,10 +194,10 @@ public class TtsLambda implements RequestHandler<Map<String, Object>, String> {
         }
     }
 
-    private String generateChunkOutputKey(String inputKey, int chunkIndex) {
-        // Remove .md extension and add chunk index and .mp3
+    private String generateOutputKey(String inputKey) {
+        // Remove .md extension and add .wav extension
         String baseName = inputKey.replaceAll("\\.md$", "");
-        return String.format("%s_chunk_%03d.mp3", baseName, chunkIndex + 1);
+        return baseName + ".wav";
     }
 
     private void copyMetadataToProcessedBucket(String sourceBucket, String objectKey, Context context) {
@@ -188,7 +256,7 @@ public class TtsLambda implements RequestHandler<Map<String, Object>, String> {
             PutObjectRequest putObjectRequest = PutObjectRequest.builder()
                     .bucket(PROCESSED_BUCKET_NAME)
                     .key(objectKey)
-                    .contentType("audio/mpeg")
+                    .contentType("audio/wav")
                     .contentLength((long) audioData.length)
                     .build();
             
