@@ -57,7 +57,22 @@ public class TtsLambda implements RequestHandler<Map<String, Object>, String> {
             String bucketName = extractBucketName(event);
             String objectKey = extractObjectKey(event);
 
-            context.getLogger().log("Processing markdown file: " + objectKey + " from bucket: " + bucketName);
+            context.getLogger().log("Processing file: " + objectKey + " from bucket: " + bucketName);
+
+            // Check if this is a metadata.json file - if so, copy it directly to processed bucket
+            if (objectKey.endsWith("metadata.json")) {
+                context.getLogger().log("Detected metadata.json file, copying directly to processed bucket without TTS conversion");
+                copyMetadataToProcessedBucket(bucketName, objectKey, context);
+                String result = "Successfully copied metadata.json to processed bucket: " + objectKey;
+                context.getLogger().log(result);
+                return result;
+            }
+
+            // Check if this is a markdown file
+            if (!objectKey.endsWith(".md")) {
+                context.getLogger().log("Skipping non-markdown file: " + objectKey);
+                return "Skipped non-markdown file: " + objectKey;
+            }
 
             // Download markdown file from S3
             String markdownContent = downloadMarkdownFromS3(bucketName, objectKey, context);
@@ -115,6 +130,39 @@ public class TtsLambda implements RequestHandler<Map<String, Object>, String> {
         // Remove .md extension and add chunk index and .mp3
         String baseName = inputKey.replaceAll("\\.md$", "");
         return String.format("%s_chunk_%03d.mp3", baseName, chunkIndex + 1);
+    }
+
+    private void copyMetadataToProcessedBucket(String sourceBucket, String objectKey, Context context) {
+        context.getLogger().log("Copying metadata.json from " + sourceBucket + "/" + objectKey + " to " + PROCESSED_BUCKET_NAME);
+
+        try {
+            // Download the metadata file
+            GetObjectRequest getObjectRequest = GetObjectRequest.builder()
+                    .bucket(sourceBucket)
+                    .key(objectKey)
+                    .build();
+
+            ResponseBytes<GetObjectResponse> objectBytes = s3Client.getObjectAsBytes(getObjectRequest);
+            byte[] metadataContent = objectBytes.asByteArray();
+
+            // Upload to processed bucket with same key structure
+            PutObjectRequest putObjectRequest = PutObjectRequest.builder()
+                    .bucket(PROCESSED_BUCKET_NAME)
+                    .key(objectKey)
+                    .contentType("application/json")
+                    .contentLength((long) metadataContent.length)
+                    .build();
+
+            PutObjectResponse putObjectResponse = s3Client.putObject(putObjectRequest,
+                    RequestBody.fromInputStream(new ByteArrayInputStream(metadataContent), metadataContent.length));
+
+            context.getLogger().log("Successfully copied metadata.json to processed bucket");
+            context.getLogger().log("ETag: " + putObjectResponse.eTag());
+
+        } catch (Exception e) {
+            context.getLogger().log("ERROR copying metadata.json: " + e.getMessage());
+            throw new RuntimeException("Failed to copy metadata.json to processed bucket", e);
+        }
     }
 
     private void uploadAudioToS3(String objectKey, byte[] audioData, Context context) {
