@@ -2,6 +2,7 @@ package com.myorg.tts;
 
 import com.myorg.tts.providers.OpenAiTtsProvider;
 import com.myorg.tts.providers.SelfHostedTtsProvider;
+import com.myorg.tts.providers.VibeVoiceProvider;
 
 /**
  * Factory for creating TTS provider instances based on configuration
@@ -10,7 +11,8 @@ public class TtsProviderFactory {
 
     public enum ProviderType {
         OPENAI,
-        SELF_HOSTED
+        SELF_HOSTED,
+        VIBEVOICE
     }
 
     /**
@@ -29,7 +31,7 @@ public class TtsProviderFactory {
             providerType = ProviderType.valueOf(providerTypeStr.toUpperCase());
         } catch (IllegalArgumentException e) {
             throw new IllegalStateException("Invalid TTS_PROVIDER: " + providerTypeStr +
-                    ". Valid values are: OPENAI, SELF_HOSTED");
+                    ". Valid values are: OPENAI, SELF_HOSTED, VIBEVOICE");
         }
 
         return createProvider(providerType);
@@ -47,6 +49,8 @@ public class TtsProviderFactory {
                 return createOpenAiProvider();
             case SELF_HOSTED:
                 return createSelfHostedProvider();
+            case VIBEVOICE:
+                return createVibeVoiceProvider();
             default:
                 throw new IllegalArgumentException("Unsupported provider type: " + type);
         }
@@ -74,6 +78,14 @@ public class TtsProviderFactory {
         } else {
             return new SelfHostedTtsProvider(endpointUrl);
         }
+    }
+
+    private static TtsProvider createVibeVoiceProvider() {
+        String endpointUrl = System.getenv("VIBEVOICE_ENDPOINT_URL");
+        if (endpointUrl == null || endpointUrl.isEmpty()) {
+            throw new IllegalStateException("VIBEVOICE_ENDPOINT_URL environment variable is required for VibeVoice provider");
+        }
+        return new VibeVoiceProvider(endpointUrl);
     }
 
     /**

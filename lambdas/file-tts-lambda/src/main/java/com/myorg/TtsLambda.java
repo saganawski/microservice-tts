@@ -7,6 +7,7 @@ import com.myorg.audio.WavConcatenator;
 import com.myorg.tts.TtsConfig;
 import com.myorg.tts.TtsProvider;
 import com.myorg.tts.TtsProviderFactory;
+import com.myorg.tts.providers.VibeVoiceProvider;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -26,16 +27,26 @@ import software.amazon.awssdk.services.s3.model.PutObjectResponse;
 public class TtsLambda implements RequestHandler<Map<String, Object>, String> {
     private static final String MARKDOWN_BUCKET_NAME = System.getenv("MARKDOWN_BUCKET_NAME");
     private static final String PROCESSED_BUCKET_NAME = System.getenv("PROCESSED_BUCKET_NAME");
-    private static final int CHUNK_SIZE = 900;
+    private static final int DEFAULT_CHUNK_SIZE = 900;  // Default for OpenAI
 
     private final S3Client s3Client;
     private final TtsProvider ttsProvider;
     private final TtsConfig ttsConfig;
+    private final int chunkSize;
 
     public TtsLambda() {
         this.s3Client = S3Client.builder().build();
         this.ttsProvider = TtsProviderFactory.createProvider();
         this.ttsConfig = TtsProviderFactory.createDefaultConfig();
+
+        // Set chunk size based on provider type
+        if (ttsProvider instanceof VibeVoiceProvider) {
+            this.chunkSize = VibeVoiceProvider.getMaxChunkSize();
+        } else {
+            // Use environment variable or default for other providers
+            String chunkSizeStr = System.getenv("TTS_CHUNK_SIZE");
+            this.chunkSize = (chunkSizeStr != null) ? Integer.parseInt(chunkSizeStr) : DEFAULT_CHUNK_SIZE;
+        }
     }
 
     @Override
@@ -80,9 +91,9 @@ public class TtsLambda implements RequestHandler<Map<String, Object>, String> {
             String markdownContent = downloadMarkdownFromS3(bucketName, objectKey, context);
             context.getLogger().log("Downloaded markdown content, length: " + markdownContent.length());
 
-            // Chunk the markdown content into 900-character segments
+            // Chunk the markdown content based on provider-specific chunk size
             List<String> chunks = chunkMarkdownContent(markdownContent, context);
-            context.getLogger().log("Split markdown into " + chunks.size() + " chunks of max " + CHUNK_SIZE + " characters each");
+            context.getLogger().log("Split markdown into " + chunks.size() + " chunks of max " + chunkSize + " characters each");
 
             // Process each chunk with TTS and collect WAV data
             List<byte[]> wavChunks = new ArrayList<>();
@@ -323,7 +334,7 @@ public class TtsLambda implements RequestHandler<Map<String, Object>, String> {
     }
 
     private List<String> chunkMarkdownContent(String markdownContent, Context context) {
-        context.getLogger().log("Chunking markdown content into " + CHUNK_SIZE + " character segments");
+        context.getLogger().log("Chunking markdown content into " + chunkSize + " character segments");
 
         List<String> chunks = new ArrayList<>();
 
@@ -334,7 +345,7 @@ public class TtsLambda implements RequestHandler<Map<String, Object>, String> {
 
         String content = markdownContent.trim();
 
-        if (content.length() <= CHUNK_SIZE) {
+        if (content.length() <= chunkSize) {
             chunks.add(content);
             context.getLogger().log("Content fits in single chunk: " + content.length() + " characters");
             return chunks;
@@ -344,7 +355,7 @@ public class TtsLambda implements RequestHandler<Map<String, Object>, String> {
         int chunkNumber = 1;
 
         while (start < content.length()) {
-            int end = Math.min(start + CHUNK_SIZE, content.length());
+            int end = Math.min(start + chunkSize, content.length());
 
             // Try to break at word boundaries to avoid cutting words
             if (end < content.length()) {
