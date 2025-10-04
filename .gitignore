@@ -16,3 +16,4 @@ target/
 .cdk.staging
 cdk.out
 
+cdk.context.json

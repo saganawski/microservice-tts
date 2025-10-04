@@ -24,6 +24,12 @@ public class VibeVoiceStack extends Stack {
                           final Bucket markdownBucket, final Bucket processedBucket) {
         super(scope, id, props);
 
+        // Grant S3 access if buckets are provided (optional for model caching)
+        if (markdownBucket != null && processedBucket != null) {
+            // This section is kept for backward compatibility but is no longer required
+            // The TTS Lambda handles S3 access directly
+        }
+
         // Create VPC for the VibeVoice service
         Vpc vpc = Vpc.Builder.create(this, "VibeVoiceVpc")
             .maxAzs(2)
@@ -72,104 +78,57 @@ public class VibeVoiceStack extends Stack {
             ))
             .build();
 
-        // Grant S3 access for potential model caching
-        markdownBucket.grantRead(instanceRole);
-        processedBucket.grantWrite(instanceRole);
+        // Grant S3 access if buckets are provided
+        if (markdownBucket != null) {
+            markdownBucket.grantRead(instanceRole);
+        }
+        if (processedBucket != null) {
+            processedBucket.grantWrite(instanceRole);
+        }
 
-        // User data script to install and run VibeVoice service
+        // User data script for Deep Learning AMI (Ubuntu 22.04)
+        // NVIDIA drivers, CUDA, Docker, and NVIDIA Container Toolkit are already installed
         UserData userData = UserData.forLinux();
         userData.addCommands(
             "#!/bin/bash",
             "set -e",
+            "exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1",
             "",
-            "# Update system",
-            "apt-get update",
-            "apt-get upgrade -y",
+            "echo 'Starting VibeVoice setup on Deep Learning AMI'",
             "",
-            "# Install Docker",
-            "curl -fsSL https://get.docker.com -o get-docker.sh",
-            "sh get-docker.sh",
-            "usermod -aG docker ubuntu",
+            "# Disable GSP firmware for g4dn stability (required for g4dn instances)",
+            "echo 'options nvidia NVreg_EnableGpuFirmware=0' | sudo tee /etc/modprobe.d/nvidia.conf",
             "",
-            "# Install NVIDIA Container Toolkit",
-            "distribution=$(. /etc/os-release;echo $ID$VERSION_ID)",
-            "curl -s -L https://nvidia.github.io/nvidia-docker/gpgkey | apt-key add -",
-            "curl -s -L https://nvidia.github.io/nvidia-docker/$distribution/nvidia-docker.list | tee /etc/apt/sources.list.d/nvidia-docker.list",
-            "apt-get update",
-            "apt-get install -y nvidia-container-toolkit",
-            "systemctl restart docker",
-            "",
-            "# Install Docker Compose",
-            "curl -L \"https://github.com/docker/compose/releases/download/v2.20.0/docker-compose-$(uname -s)-$(uname -m)\" -o /usr/local/bin/docker-compose",
-            "chmod +x /usr/local/bin/docker-compose",
+            "# Add ubuntu user to docker group",
+            "sudo usermod -aG docker ubuntu",
             "",
             "# Create application directory",
-            "mkdir -p /opt/vibevoice",
-            "cd /opt/vibevoice",
+            "sudo mkdir -p /opt/vibevoice",
+            "sudo chown -R ubuntu:ubuntu /opt/vibevoice",
             "",
-            "# Create docker-compose.yml",
-            "cat > docker-compose.yml << 'EOF'",
-            "version: '3.8'",
-            "services:",
-            "  vibevoice:",
-            "    image: vibevoice:latest",
-            "    container_name: vibevoice-service",
-            "    ports:",
-            "      - '8000:8000'",
-            "    environment:",
-            "      - VIBEVOICE_MODEL=microsoft/VibeVoice-1.5B",
-            "      - USE_QUANTIZATION=true",
-            "      - PORT=8000",
-            "    volumes:",
-            "      - model-cache:/root/.cache/huggingface",
-            "    deploy:",
-            "      resources:",
-            "        reservations:",
-            "          devices:",
-            "            - driver: nvidia",
-            "              count: 1",
-            "              capabilities: [gpu]",
-            "    restart: unless-stopped",
-            "volumes:",
-            "  model-cache:",
-            "EOF",
+            "# Create a marker file indicating user-data completed",
+            "echo 'User data setup completed successfully' | sudo tee /opt/vibevoice/setup-complete.txt",
             "",
-            "# Create Dockerfile",
-            "cat > Dockerfile << 'EOF'",
-            "FROM pytorch/pytorch:2.1.0-cuda12.1-cudnn8-runtime",
-            "WORKDIR /app",
-            "RUN apt-get update && apt-get install -y ffmpeg git curl && rm -rf /var/lib/apt/lists/*",
-            "COPY requirements.txt .",
-            "RUN pip install flask flask-cors torch transformers accelerate safetensors sentencepiece bitsandbytes scipy librosa soundfile gunicorn",
-            "COPY server.py .",
-            "COPY vibevoice_model.py .",
-            "ENV PYTHONUNBUFFERED=1",
-            "EXPOSE 8000",
-            "CMD [\"python\", \"server.py\"]",
-            "EOF",
+            "# Log GPU status",
+            "nvidia-smi > /opt/vibevoice/gpu-status.txt 2>&1 || echo 'nvidia-smi failed' > /opt/vibevoice/gpu-status.txt",
             "",
-            "# Note: In production, you would copy the actual Python files here",
-            "# For now, create placeholder files",
-            "echo 'print(\"VibeVoice service starting...\")' > server.py",
-            "echo 'print(\"VibeVoice model module\")' > vibevoice_model.py",
-            "touch requirements.txt",
+            "echo 'User data script completed. Ready for VibeVoice service installation via SSM.'",
             "",
-            "# Build and run the service",
-            "docker build -t vibevoice:latest .",
-            "docker-compose up -d",
-            "",
-            "# Setup CloudWatch logging",
-            "docker logs vibevoice-service"
+            "# Reboot to apply GSP firmware changes",
+            "sudo reboot"
         );
 
         // Select the appropriate instance type - g4dn.xlarge for 1.5B model
         InstanceType instanceType = InstanceType.of(InstanceClass.G4DN, InstanceSize.XLARGE);
 
-        // Get the latest Deep Learning AMI with CUDA support
-        IMachineImage machineImage = MachineImage.lookup(LookupMachineImageProps.builder()
-            .name("Deep Learning AMI GPU PyTorch 2.* (Ubuntu 20.04)*")
-            .owners(Arrays.asList("amazon"))
-            .build());
+        // Use AWS Deep Learning AMI with pre-installed NVIDIA drivers
+        // This AMI includes: NVIDIA Driver R570, CUDA 12.8, cuDNN 9.10, Docker, NVIDIA Container Toolkit
+        IMachineImage machineImage = MachineImage.lookup(
+            LookupMachineImageProps.builder()
+                .name("Deep Learning Base OSS Nvidia Driver GPU AMI (Ubuntu 22.04)*")
+                .owners(Arrays.asList("amazon"))
+                .build()
+        );
 
         // Create EC2 instance
         vibeVoiceInstance = Instance.Builder.create(this, "VibeVoiceInstance")
@@ -186,7 +145,12 @@ public class VibeVoiceStack extends Stack {
             .blockDevices(Arrays.asList(
                 BlockDevice.builder()
                     .deviceName("/dev/sda1")
-                    .volume(BlockDeviceVolume.ebs(100)) // 100 GB storage
+                    .volume(BlockDeviceVolume.ebs(80,
+                        EbsDeviceOptions.builder()
+                            .volumeType(EbsDeviceVolumeType.GP3)
+                            .deleteOnTermination(true)
+                            .build()
+                    ))
                     .build()
             ))
             .build();

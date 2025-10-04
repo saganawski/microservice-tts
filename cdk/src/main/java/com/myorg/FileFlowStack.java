@@ -16,8 +16,14 @@ import java.util.Map;
 
 public class FileFlowStack extends Stack {
     private final Function validationLambda;
+    private final Bucket markdownFileBucket;
+    private final Bucket processedFileBucket;
 
     public FileFlowStack(final Construct scope, final String id, final StackProps props) {
+        this(scope, id, props, null);
+    }
+
+    public FileFlowStack(final Construct scope, final String id, final StackProps props, final String vibeVoiceUrl) {
 
         super(scope, id, props);
 
@@ -28,7 +34,7 @@ public class FileFlowStack extends Stack {
                 .versioned(false)
                 .build();
 
-        final Bucket markdownFileBucket = Bucket.Builder.create(this, "MarkdownFileBucket")
+        markdownFileBucket = Bucket.Builder.create(this, "MarkdownFileBucket")
                 .bucketName("markdown-file-bucket" + accountNumber)
                 .versioned(false)
                 .build();
@@ -38,14 +44,14 @@ public class FileFlowStack extends Stack {
                 .versioned(false)
                 .build();
 
-        final Bucket processedFileBucket = Bucket.Builder.create(this, "ProcessedFileBucket")
+        processedFileBucket = Bucket.Builder.create(this, "ProcessedFileBucket")
                 .bucketName("processed-file-bucket" + accountNumber)
                 .versioned(false)
                 .build();
 
         validationLambda = Function.Builder.create(this, "FileValidationLambda")
                 .runtime(software.amazon.awscdk.services.lambda.Runtime.JAVA_21)
-                .code(Code.fromAsset("lambdas/file-validation-lambda/target/file-validation-lambda.jar"))
+                .code(Code.fromAsset("../lambdas/file-validation-lambda/target/file-validation-lambda.jar"))
                 .handler("com.myorg.FileValidationLambda::handleRequest")
                 .environment(Map.of(
                         "ORIGINAL_BUCKET_NAME", originalFileBucket.getBucketName()))
@@ -56,29 +62,44 @@ public class FileFlowStack extends Stack {
         // Grant permissions to the lambda functions to access the S3 buckets
         originalFileBucket.grantPut(validationLambda);
 
+        // Configure TTS provider for TransformLambda
+        Map<String, String> transformEnvironment = new java.util.HashMap<>();
+        transformEnvironment.put("ORIGINAL_BUCKET_NAME", originalFileBucket.getBucketName());
+        transformEnvironment.put("MARKDOWN_BUCKET_NAME", markdownFileBucket.getBucketName());
+        transformEnvironment.put("CHAPTERS_BUCKET_NAME", chaptersBucket.getBucketName());
+        transformEnvironment.put("MISTRAL_API_KEY", System.getenv("MISTRAL_API_KEY"));
+
+        // Add TTS provider configuration for routing
+        transformEnvironment.put("TTS_PROVIDER", System.getenv("TTS_PROVIDER") != null ? System.getenv("TTS_PROVIDER") : "OPENAI");
+        transformEnvironment.put("OPENAI_MAX_CHUNK", "4096");
+        transformEnvironment.put("VIBEVOICE_MAX_CHUNK", "192000"); // 75% of 256k
+
         final Function transformLambda = Function.Builder.create(this, "TransformLambda")
                 .runtime(software.amazon.awscdk.services.lambda.Runtime.JAVA_21)
-                .code(Code.fromAsset("lambdas/file-transform-lambda/target/file-transform-lambda.jar"))
+                .code(Code.fromAsset("../lambdas/file-transform-lambda/target/file-transform-lambda.jar"))
                 .handler("com.myorg.TransformLambda::handleRequest")
-                .environment(Map.of(
-                        "ORIGINAL_BUCKET_NAME", originalFileBucket.getBucketName(),
-                        "MARKDOWN_BUCKET_NAME", markdownFileBucket.getBucketName(),
-                        "MISTRAL_API_KEY", System.getenv("MISTRAL_API_KEY")))
+                .environment(transformEnvironment)
                 .timeout(Duration.minutes(5))
                 .build();
 
         // Grant permissions to the lambda functions to access the S3 buckets
         originalFileBucket.grantRead(transformLambda);
         markdownFileBucket.grantPut(transformLambda);
+        chaptersBucket.grantPut(transformLambda); // For direct routing when using VibeVoice
 
-        // Chapter Splitter Lambda
+        // Chapter Splitter Lambda with TTS provider configuration
+        Map<String, String> chapterSplitterEnvironment = new java.util.HashMap<>();
+        chapterSplitterEnvironment.put("MARKDOWN_BUCKET_NAME", markdownFileBucket.getBucketName());
+        chapterSplitterEnvironment.put("CHAPTERS_BUCKET_NAME", chaptersBucket.getBucketName());
+        chapterSplitterEnvironment.put("TTS_PROVIDER", System.getenv("TTS_PROVIDER") != null ? System.getenv("TTS_PROVIDER") : "OPENAI");
+        chapterSplitterEnvironment.put("OPENAI_MAX_CHUNK", "4096");
+        chapterSplitterEnvironment.put("VIBEVOICE_MAX_CHUNK", "192000"); // 75% of 256k
+
         final Function chapterSplitterLambda = Function.Builder.create(this, "ChapterSplitterLambda")
                 .runtime(Runtime.JAVA_21)
-                .code(Code.fromAsset("lambdas/chapter-splitter-lambda/target/chapter-splitter-lambda.jar"))
+                .code(Code.fromAsset("../lambdas/chapter-splitter-lambda/target/chapter-splitter-lambda.jar"))
                 .handler("com.myorg.ChapterSplitterLambda::handleRequest")
-                .environment(Map.of(
-                        "MARKDOWN_BUCKET_NAME", markdownFileBucket.getBucketName(),
-                        "CHAPTERS_BUCKET_NAME", chaptersBucket.getBucketName()))
+                .environment(chapterSplitterEnvironment)
                 .timeout(Duration.minutes(5))
                 .memorySize(512)
                 .build();
@@ -92,8 +113,18 @@ public class FileFlowStack extends Stack {
         ttsEnvironment.put("MARKDOWN_BUCKET_NAME", chaptersBucket.getBucketName());
         ttsEnvironment.put("PROCESSED_BUCKET_NAME", processedFileBucket.getBucketName());
 
-        // TTS Provider configuration
-        ttsEnvironment.put("TTS_PROVIDER", System.getenv("TTS_PROVIDER") != null ? System.getenv("TTS_PROVIDER") : "OPENAI");
+        // TTS Provider configuration - prioritize VibeVoice if URL is provided
+        String ttsProvider = "OPENAI"; // Default
+        if (vibeVoiceUrl != null && !vibeVoiceUrl.isEmpty()) {
+            ttsProvider = "VIBEVOICE";
+            ttsEnvironment.put("VIBEVOICE_ENDPOINT_URL", vibeVoiceUrl);
+        } else if (System.getenv("TTS_PROVIDER") != null) {
+            ttsProvider = System.getenv("TTS_PROVIDER");
+        }
+
+        ttsEnvironment.put("TTS_PROVIDER", ttsProvider);
+        ttsEnvironment.put("OPENAI_MAX_CHUNK", "4096");
+        ttsEnvironment.put("VIBEVOICE_MAX_CHUNK", "192000"); // 75% of 256k
 
         // OpenAI configuration (when using OpenAI provider)
         if (System.getenv("OPENAI_API_KEY") != null) {
@@ -133,7 +164,7 @@ public class FileFlowStack extends Stack {
 
         final Function ttsLambda = Function.Builder.create(this, "TTSLambda")
                 .runtime(Runtime.JAVA_21)
-                .code(Code.fromAsset("lambdas/file-tts-lambda/target/file-tts-lambda.jar"))
+                .code(Code.fromAsset("../lambdas/file-tts-lambda/target/file-tts-lambda.jar"))
                 .handler("com.myorg.TtsLambda::handleRequest")
                 .environment(ttsEnvironment)
                 .timeout(Duration.minutes(15))
@@ -152,5 +183,13 @@ public class FileFlowStack extends Stack {
 
     public Function getValidationLambda() {
         return validationLambda;
+    }
+
+    public Bucket getMarkdownFileBucket() {
+        return markdownFileBucket;
+    }
+
+    public Bucket getProcessedFileBucket() {
+        return processedFileBucket;
     }
 }

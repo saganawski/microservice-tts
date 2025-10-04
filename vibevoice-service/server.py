@@ -49,10 +49,12 @@ def load_model():
     logger.info(f"Using device: {device}")
 
     try:
-        from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+        from vibevoice import VibeVoiceModel
 
         if USE_QUANTIZATION and device.type == "cuda":
             # 4-bit quantization configuration
+            from transformers import BitsAndBytesConfig
+
             quantization_config = BitsAndBytesConfig(
                 load_in_4bit=True,
                 bnb_4bit_compute_dtype=torch.bfloat16,
@@ -61,16 +63,16 @@ def load_model():
             )
             logger.info("Loading model with 4-bit quantization")
 
-            # For now, we'll use a placeholder since VibeVoice requires custom loading
-            # In production, this would load the actual VibeVoice model
-            logger.warning("VibeVoice model loading is simulated - actual implementation requires VibeVoice library")
-            model = None  # Placeholder for actual VibeVoice model
-            tokenizer = None  # Placeholder for actual tokenizer
+            model = VibeVoiceModel.from_pretrained(
+                MODEL_NAME,
+                quantization_config=quantization_config,
+                device_map="auto"
+            )
         else:
             logger.info("Loading model without quantization")
-            # Load model normally
-            model = None  # Placeholder for actual VibeVoice model
-            tokenizer = None  # Placeholder for actual tokenizer
+            model = VibeVoiceModel.from_pretrained(MODEL_NAME)
+            if device.type == "cuda":
+                model = model.to(device)
 
         logger.info("Model loaded successfully")
 
@@ -79,7 +81,8 @@ def load_model():
         logger.error(traceback.format_exc())
         raise
 
-def text_to_speech(text: str, speaker_names: list = None, temperature: float = 0.7) -> bytes:
+def text_to_speech(text: str, speaker_names: list = None, temperature: float = 0.7,
+                   cfg_scale: int = 3, inference_steps: int = 50) -> bytes:
     """
     Convert text to speech using VibeVoice.
 
@@ -87,26 +90,53 @@ def text_to_speech(text: str, speaker_names: list = None, temperature: float = 0
         text: Input text to convert
         speaker_names: List of speaker names for multi-speaker synthesis
         temperature: Sampling temperature
+        cfg_scale: Classifier-free guidance scale
+        inference_steps: Number of diffusion steps
 
     Returns:
         WAV audio data as bytes
     """
     try:
-        # Simulate TTS processing for now
-        # In production, this would call the actual VibeVoice model
+        if model is None:
+            raise RuntimeError("Model not loaded. Please restart the service.")
+
         logger.info(f"Processing text of length: {len(text)}")
 
-        # For demonstration, generate a simple sine wave as placeholder audio
-        sample_rate = 24000
-        duration = min(len(text) / 150, 10)  # Rough estimate: 150 chars per second
-        t = np.linspace(0, duration, int(sample_rate * duration))
-        audio = 0.5 * np.sin(2 * np.pi * 440 * t)  # 440 Hz sine wave
+        # Default speaker names if not provided
+        if speaker_names is None:
+            speaker_names = ["Speaker0"]
+
+        # Generate speech using VibeVoice model
+        audio = model.generate(
+            text=text,
+            speaker_names=speaker_names,
+            temperature=temperature,
+            cfg_scale=cfg_scale,
+            inference_steps=inference_steps,
+            do_sample=True,
+            top_p=0.9,
+            top_k=50
+        )
+
+        # Convert to numpy array if tensor
+        if isinstance(audio, torch.Tensor):
+            audio = audio.cpu().numpy()
+
+        # Ensure audio is 1D array
+        if len(audio.shape) > 1:
+            audio = audio.squeeze()
+
+        # Normalize audio to [-1, 1] if needed
+        if audio.max() > 1.0 or audio.min() < -1.0:
+            audio = audio / np.max(np.abs(audio))
 
         # Convert to WAV format
+        sample_rate = 24000
         buffer = io.BytesIO()
         sf.write(buffer, audio, sample_rate, format='WAV')
         buffer.seek(0)
 
+        logger.info(f"Generated audio of duration: {len(audio) / sample_rate:.2f}s")
         return buffer.read()
 
     except Exception as e:
@@ -148,12 +178,14 @@ def tts_endpoint():
         text = data['text']
         speaker_names = data.get('speaker_names', ['Speaker0'])
         temperature = data.get('temperature', 0.7)
+        cfg_scale = data.get('cfg_scale', 3)
+        inference_steps = data.get('inference_steps', 50)
 
         logger.info(f"TTS request - Text length: {len(text)}, Speakers: {speaker_names}")
 
         # Perform TTS
         start_time = time.time()
-        audio_data = text_to_speech(text, speaker_names, temperature)
+        audio_data = text_to_speech(text, speaker_names, temperature, cfg_scale, inference_steps)
         processing_time = time.time() - start_time
 
         logger.info(f"TTS completed in {processing_time:.2f} seconds")

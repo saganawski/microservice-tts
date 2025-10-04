@@ -31,6 +31,8 @@ import java.util.Map;
 public class TransformLambda implements RequestHandler<Map<String, Object>, String> {
         private static final String ORIGINAL_BUCKET_NAME = System.getenv("ORIGINAL_BUCKET_NAME");
         private static final String MARKDOWN_BUCKET_NAME = System.getenv("MARKDOWN_BUCKET_NAME");
+        private static final String CHAPTERS_BUCKET_NAME = System.getenv("CHAPTERS_BUCKET_NAME");
+        private static final String TTS_PROVIDER = System.getenv("TTS_PROVIDER") != null ? System.getenv("TTS_PROVIDER") : "OPENAI";
         private static final String MISTRAL_API_KEY = System.getenv("MISTRAL_API_KEY");
         private static final String MISTRAL_BASE_URL = "https://api.mistral.ai/v1";
 
@@ -101,7 +103,15 @@ public class TransformLambda implements RequestHandler<Map<String, Object>, Stri
                 }
 
                 // Step 5: Upload consolidated markdown to S3
-                final boolean uploadSuccessful = uploadMarkdownToS3(consolidatedMarkdown, fileName, context);
+                // Route based on TTS provider - VibeVoice goes directly to chapters bucket
+                final boolean uploadSuccessful;
+                if ("VIBEVOICE".equalsIgnoreCase(TTS_PROVIDER)) {
+                    context.getLogger().log("Using VibeVoice provider - uploading directly to chapters bucket for TTS processing");
+                    uploadSuccessful = uploadDirectlyForTts(consolidatedMarkdown, fileName, context);
+                } else {
+                    context.getLogger().log("Using OpenAI provider - uploading to markdown bucket for chapter splitting");
+                    uploadSuccessful = uploadMarkdownToS3(consolidatedMarkdown, fileName, context);
+                }
 
                 if (!uploadSuccessful) {
                     return "Error: Failed to upload markdown file to S3";
@@ -364,6 +374,46 @@ public class TransformLambda implements RequestHandler<Map<String, Object>, Stri
                 return originalFileName.substring(0, lastDotIndex) + ".md";
             } else {
                 return originalFileName + ".md";
+            }
+        }
+
+        private boolean uploadDirectlyForTts(String markdownContent, String originalFileName, com.amazonaws.services.lambda.runtime.Context context) {
+            context.getLogger().log("Uploading markdown directly to chapters bucket for VibeVoice TTS processing");
+
+            try {
+                String markdownFileName = generateMarkdownFileName(originalFileName);
+                String baseName = markdownFileName.replace(".md", "");
+
+                // Upload the full markdown as a single "chapter" for TTS to process
+                String chapterKey = baseName + "/001.md";
+                context.getLogger().log("Generated chapter key: " + chapterKey);
+
+                PutObjectRequest putRequest = PutObjectRequest.builder()
+                        .bucket(CHAPTERS_BUCKET_NAME)
+                        .key(chapterKey)
+                        .contentType("text/markdown")
+                        .metadata(Map.of(
+                            "source-file", originalFileName,
+                            "tts-provider", TTS_PROVIDER
+                        ))
+                        .build();
+
+                RequestBody requestBody = RequestBody.fromString(markdownContent);
+                var response = s3Client.putObject(putRequest, requestBody);
+
+                boolean successful = response.sdkHttpResponse().isSuccessful();
+                context.getLogger().log("Direct TTS upload successful: " + successful);
+
+                if (successful) {
+                    context.getLogger().log("Markdown file uploaded directly to chapters bucket: " + chapterKey);
+                    context.getLogger().log("File size: " + markdownContent.length() + " characters");
+                }
+
+                return successful;
+
+            } catch (Exception e) {
+                context.getLogger().log("ERROR uploading directly to chapters bucket: " + e.getMessage());
+                return false;
             }
         }
 

@@ -20,8 +20,8 @@ public class VibeVoiceProvider implements TtsProvider {
     private final HttpClient httpClient;
 
     // VibeVoice specific configurations
-    private static final int MAX_CHUNK_SIZE = 20000; // VibeVoice can handle much larger chunks
-    private static final Duration REQUEST_TIMEOUT = Duration.ofMinutes(2); // Longer timeout for larger chunks
+    private static final int MAX_CHUNK_SIZE = 192000; // 75% of VibeVoice's 256k character limit (64k tokens * 4 chars/token)
+    private static final Duration REQUEST_TIMEOUT = Duration.ofMinutes(5); // Longer timeout for much larger chunks
 
     public VibeVoiceProvider(String endpointUrl) {
         this.endpointUrl = endpointUrl;

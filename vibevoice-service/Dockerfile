@@ -5,7 +5,8 @@ FROM pytorch/pytorch:2.1.0-cuda12.1-cudnn8-runtime
 WORKDIR /app
 
 # Install system dependencies
-RUN apt-get update && apt-get install -y \
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     git \
     curl \
@@ -17,8 +18,15 @@ COPY requirements.txt .
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install Flash Attention for improved performance (optional)
-# RUN pip install flash-attn --no-build-isolation || echo "Flash Attention not installed"
+# Clone and install VibeVoice from GitHub
+RUN git clone https://github.com/microsoft/VibeVoice.git /tmp/vibevoice && \
+    cd /tmp/vibevoice && \
+    pip install --no-cache-dir -e . && \
+    cd /app && \
+    rm -rf /tmp/vibevoice
+
+# Install Flash Attention for improved performance (optional, may take time to build)
+RUN pip install flash-attn --no-build-isolation || echo "Flash Attention not installed, continuing without it"
 
 # Copy application code
 COPY server.py .

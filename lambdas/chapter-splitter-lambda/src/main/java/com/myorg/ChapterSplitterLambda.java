@@ -23,6 +23,9 @@ import java.util.regex.Pattern;
 public class ChapterSplitterLambda implements RequestHandler<Map<String, Object>, String> {
     private static final String MARKDOWN_BUCKET_NAME = System.getenv("MARKDOWN_BUCKET_NAME");
     private static final String CHAPTERS_BUCKET_NAME = System.getenv("CHAPTERS_BUCKET_NAME");
+    private static final String TTS_PROVIDER = System.getenv("TTS_PROVIDER") != null ? System.getenv("TTS_PROVIDER") : "OPENAI";
+    private static final int OPENAI_MAX_CHUNK = Integer.parseInt(System.getenv("OPENAI_MAX_CHUNK") != null ? System.getenv("OPENAI_MAX_CHUNK") : "4096");
+    private static final int VIBEVOICE_MAX_CHUNK = Integer.parseInt(System.getenv("VIBEVOICE_MAX_CHUNK") != null ? System.getenv("VIBEVOICE_MAX_CHUNK") : "192000");
     private static final int DEFAULT_WORDS_PER_CHAPTER = 5000;
     private static final Pattern H1_PATTERN = Pattern.compile("^#\\s+(.+)$", Pattern.MULTILINE);
 
@@ -64,7 +67,7 @@ public class ChapterSplitterLambda implements RequestHandler<Map<String, Object>
             // Download markdown content from S3
             String markdownContent = downloadMarkdownFromS3(markdownFileName, context);
 
-            // Split into chapters
+            // Split into chapters based on TTS provider
             List<Chapter> chapters = splitIntoChapters(markdownContent, context);
             context.getLogger().log("Split document into " + chapters.size() + " chapters");
 
@@ -121,56 +124,24 @@ public class ChapterSplitterLambda implements RequestHandler<Map<String, Object>
     }
 
     private List<Chapter> splitIntoChapters(String markdownContent, Context context) {
-        List<Chapter> chapters = new ArrayList<>();
+        // Determine chunk size based on TTS provider
+        int maxChunkSize = TTS_PROVIDER.equalsIgnoreCase("VIBEVOICE") ? VIBEVOICE_MAX_CHUNK : OPENAI_MAX_CHUNK;
+        context.getLogger().log("Using TTS provider: " + TTS_PROVIDER + " with max chunk size: " + maxChunkSize + " characters");
 
-        // Try to split by H1 headers first
-        Matcher matcher = H1_PATTERN.matcher(markdownContent);
-        List<Integer> headerPositions = new ArrayList<>();
-        List<String> headerTitles = new ArrayList<>();
-
-        while (matcher.find()) {
-            headerPositions.add(matcher.start());
-            headerTitles.add(matcher.group(1).trim());
-        }
-
-        if (!headerPositions.isEmpty()) {
-            context.getLogger().log("Found " + headerPositions.size() + " H1 headers, using them as chapter boundaries");
-
-            for (int i = 0; i < headerPositions.size(); i++) {
-                int start = headerPositions.get(i);
-                int end = (i < headerPositions.size() - 1) ? headerPositions.get(i + 1) : markdownContent.length();
-
-                String chapterContent = markdownContent.substring(start, end).trim();
-                String title = sanitizeTitle(headerTitles.get(i));
-
-                chapters.add(new Chapter(
-                    i + 1,
-                    title,
-                    generateSimpleChapterFileName(i + 1),
-                    chapterContent,
-                    countWords(chapterContent)
-                ));
-            }
-        } else {
-            context.getLogger().log("No H1 headers found, falling back to word count splitting");
-            chapters = splitByWordCount(markdownContent, context);
-        }
-
-        return chapters;
+        // Use character-based chunking for TTS processing
+        return splitByCharacterCount(markdownContent, maxChunkSize, context);
     }
 
-    private List<Chapter> splitByWordCount(String content, Context context) {
+    private List<Chapter> splitByCharacterCount(String content, int maxCharacters, Context context) {
         List<Chapter> chapters = new ArrayList<>();
         String[] sentences = content.split("(?<=[.!?])\\s+");
 
         StringBuilder currentChapter = new StringBuilder();
-        int currentWordCount = 0;
         int chapterIndex = 1;
 
         for (String sentence : sentences) {
-            int sentenceWordCount = countWords(sentence);
-
-            if (currentWordCount + sentenceWordCount > DEFAULT_WORDS_PER_CHAPTER && currentChapter.length() > 0) {
+            // Check if adding this sentence would exceed the max character limit
+            if (currentChapter.length() + sentence.length() + 1 > maxCharacters && currentChapter.length() > 0) {
                 // Save current chapter
                 String chapterContent = currentChapter.toString().trim();
                 chapters.add(new Chapter(
@@ -178,17 +149,16 @@ public class ChapterSplitterLambda implements RequestHandler<Map<String, Object>
                     "Part " + chapterIndex,
                     generateSimpleChapterFileName(chapterIndex),
                     chapterContent,
-                    currentWordCount
+                    countWords(chapterContent)
                 ));
+                context.getLogger().log("Created chapter " + chapterIndex + " with " + chapterContent.length() + " characters");
 
                 // Start new chapter
                 currentChapter = new StringBuilder();
-                currentWordCount = 0;
                 chapterIndex++;
             }
 
             currentChapter.append(sentence).append(" ");
-            currentWordCount += sentenceWordCount;
         }
 
         // Add remaining content as final chapter
@@ -199,11 +169,12 @@ public class ChapterSplitterLambda implements RequestHandler<Map<String, Object>
                 "Part " + chapterIndex,
                 generateSimpleChapterFileName(chapterIndex),
                 chapterContent,
-                currentWordCount
+                countWords(chapterContent)
             ));
+            context.getLogger().log("Created final chapter " + chapterIndex + " with " + chapterContent.length() + " characters");
         }
 
-        context.getLogger().log("Split content into " + chapters.size() + " chapters by word count");
+        context.getLogger().log("Split content into " + chapters.size() + " chapters by character count (max " + maxCharacters + " chars per chapter)");
         return chapters;
     }
 
