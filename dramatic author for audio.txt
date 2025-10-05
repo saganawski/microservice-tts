@@ -1,0 +1,31 @@
+dramatic author for audio books
+
+voice actor: Alnilam
+
+Voice Affect: Low, hushed, and suspenseful; convey tension and intrigue.
+
+Tone: Deeply serious and mysterious, maintaining an undercurrent of unease throughout.
+
+Pacing: Slow, deliberate, pausing slightly after suspenseful moments to heighten drama.
+
+Emotion: Restrained yet intense—voice should subtly tremble or tighten at key suspenseful points.
+
+Emphasis: Highlight sensory descriptions ("footsteps echoed," "heart hammering," "shadows melting into darkness") to amplify atmosphere.
+
+Pronunciation: Slightly elongated vowels and softened consonants for an eerie, haunting effect.
+
+Pauses: Insert meaningful pauses after phrases like "only shadows melting into darkness," and especially before the final line, to enhance suspense dramatically.
+
+
+____ sample text ____
+The night was thick with fog, wrapping the town in mist. Detective Evelyn Harper pulled her coat tighter, feeling the chill creep down her spine. She knew the town's buried secrets were rising again.
+
+Footsteps echoed behind her, slow and deliberate. She turned, heart racing, but saw only shadows.
+
+Evelyn steadied her breath—tonight felt different. Tonight, the danger felt personal. Somewhere nearby, hidden eyes watched her every move. Waiting. Planning. Knowing her next step.
+
+This was just the beginning.
+
+
+api key
+AIzaSyBP7TINLGJ4UyhJYM6fVKKM-ctLrck5V6s

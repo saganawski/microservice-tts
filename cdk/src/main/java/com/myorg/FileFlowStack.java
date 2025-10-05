@@ -131,23 +131,41 @@ public class FileFlowStack extends Stack {
             ttsEnvironment.put("TTS_RESPONSE_FORMAT", System.getenv("TTS_RESPONSE_FORMAT"));
         }
 
-        final Function ttsLambda = Function.Builder.create(this, "TTSLambda")
-                .runtime(Runtime.JAVA_21)
-                .code(Code.fromAsset("lambdas/file-tts-lambda/target/file-tts-lambda.jar"))
-                .handler("com.myorg.TtsLambda::handleRequest")
-                .environment(ttsEnvironment)
-                .timeout(Duration.minutes(15))
-                .memorySize(1024)
+        // OLD Java TTS Lambda (commented out - replaced by Gemini TTS)
+        // final Function ttsLambda = Function.Builder.create(this, "TTSLambda")
+        //         .runtime(Runtime.JAVA_21)
+        //         .code(Code.fromAsset("lambdas/file-tts-lambda/target/file-tts-lambda.jar"))
+        //         .handler("com.myorg.TtsLambda::handleRequest")
+        //         .environment(ttsEnvironment)
+        //         .timeout(Duration.minutes(15))
+        //         .memorySize(1024)
+        //         .build();
+
+        // // Grant permissions to the lambda functions to access the S3 buckets
+        // chaptersBucket.grantRead(ttsLambda);
+        // processedFileBucket.grantPut(ttsLambda);
+
+        // Gemini TTS Lambda (Python-based, replaces Java TTS Lambda)
+        final Function geminiTtsLambda = Function.Builder.create(this, "GeminiTTSLambda")
+                .runtime(Runtime.PYTHON_3_12)
+                .code(Code.fromAsset("lambdas/gemini-tts-lambda"))
+                .handler("handler.lambda_handler")
+                .environment(Map.of(
+                        "GEMINI_API_KEY", System.getenv("GEMINI_API_KEY"),
+                        "GEMINI_TTS_MODEL", "gemini-2.5-pro-preview-tts",  // Premium model
+                        "GEMINI_TTS_VOICE", "Charon"))
+                .timeout(Duration.minutes(15))  // Increased for Pro model
+                .memorySize(1024)  // Increased for better performance
                 .build();
 
-        // Grant permissions to the lambda functions to access the S3 buckets
-        chaptersBucket.grantRead(ttsLambda);
-        processedFileBucket.grantPut(ttsLambda);
+        // Grant S3 permissions for Gemini TTS Lambda
+        chaptersBucket.grantRead(geminiTtsLambda);
+        processedFileBucket.grantPut(geminiTtsLambda);
 
         // add the S3 event notification
         originalFileBucket.addEventNotification(EventType.OBJECT_CREATED, new LambdaDestination(transformLambda));
         markdownFileBucket.addEventNotification(EventType.OBJECT_CREATED, new LambdaDestination(chapterSplitterLambda));
-        chaptersBucket.addEventNotification(EventType.OBJECT_CREATED, new LambdaDestination(ttsLambda));
+        chaptersBucket.addEventNotification(EventType.OBJECT_CREATED, new LambdaDestination(geminiTtsLambda));
     }
 
     public Function getValidationLambda() {
