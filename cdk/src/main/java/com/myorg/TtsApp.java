@@ -9,7 +9,9 @@ public class TtsApp {
 
         final FileFlowStack fileFlowStack = new FileFlowStack(app, "FileFlowStack", StackProps.builder().build());
 
-        new ApiStack(app, "ApiStack", StackProps.builder().build(), fileFlowStack.getValidationLambda());
+        new ApiStack(app, "ApiStack", StackProps.builder().build(),
+                fileFlowStack.getValidationLambda(),
+                fileFlowStack.getPresignedUrlLambda());
 
         app.synth();
     }

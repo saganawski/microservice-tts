@@ -12,6 +12,7 @@
         <module>lambdas/chapter-splitter-lambda</module>
         <module>lambdas/file-tts-lambda</module>
         <module>lambdas/notification-lambda</module>
+        <module>lambdas/presigned-url-lambda</module>
         <module>cdk</module>
     </modules>
 

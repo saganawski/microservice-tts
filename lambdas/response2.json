@@ -1,0 +1,1 @@
+{"statusCode": 200, "body": "{\"message\": \"Chapter stitched successfully\", \"output_key\": \"jobs/lore-book-trimmed-20251122-100358/chapter_02.wav\", \"audio_size\": 283014218, \"s3_location\": \"s3://processed-file-bucket272765753210/jobs/lore-book-trimmed-20251122-100358/chapter_02.wav\"}"}

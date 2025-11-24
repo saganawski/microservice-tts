@@ -4,51 +4,112 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-This is a microservice-based text-to-speech (TTS) system built with AWS CDK, Java 21, and Maven. The system processes document uploads through a series of Lambda functions orchestrated by S3 events, transforming text files into audio output via API-based TTS providers.
+This is a microservice-based text-to-speech (TTS) system built with AWS CDK, Java 21, and Maven. The system processes document uploads through a series of Lambda functions orchestrated by S3 events and SQS queues, transforming text files into audio output via Gemini API-based TTS providers.
 
-## Architecture
+## Architecture - Chunked TTS Processing (Updated)
 
-The system consists of two main CDK stacks:
+The system uses a **chunked processing architecture** to handle large documents efficiently and avoid timeouts:
 
-### FileFlowStack
+### Core Stacks
+
+#### FileFlowStack
 - **OriginalFileBucket**: Stores uploaded files (PDF/TXT/EPUB)
-- **MarkdownFileBucket**: Stores consolidated markdown files from OCR processing
-- **ChaptersBucket**: Stores individual chapter chunks ready for TTS processing
-- **ProcessedFileBucket**: Stores final audio files
-- **ValidationLambda**: Validates file uploads and stores in OriginalFileBucket
-- **TransformLambda**: Downloads files, processes with Mistral OCR API, generates consolidated markdown
-- **ChapterSplitterLambda**: Splits markdown into chapters and chunks for TTS processing
-- **TTSLambda**: Converts text chunks to audio via API calls (OpenAI or self-hosted TTS)
+- **TextChunksBucket**: Stores text chunks (4.5k tokens each) for TTS processing
+- **AudioChunksBucket**: Stores individual audio chunks before stitching
+- **ProcessedFileBucket**: Stores final concatenated audio files with crossfading
 
-### ApiStack
+### Lambda Functions (Chunked Architecture)
+
+1. **OrchestratorLambda**
+   - Analyzes PDF structure using Gemini Vision API
+   - Detects chapters and page boundaries
+   - Queues chapters for processing in SQS FIFO queue
+
+2. **ChapterTextExtractorLambda** (Updated)
+   - Extracts text from specific chapter pages using Gemini API
+   - Chunks text into 4,500 token segments (reduced from 9,000)
+   - Stores text chunks in S3
+   - Sends each chunk to TTS queue for parallel processing
+
+3. **TTSGenerationLambda** (New)
+   - Processes individual text chunks from SQS queue
+   - **Rate Limited**: Implements token-based delay to stay under 10k tokens/minute
+   - **Concurrency**: Limited to 2 concurrent executions (was 20)
+   - Implements exponential backoff retry logic for API rate limits
+   - Generates audio using Gemini TTS API
+   - Stores audio chunks in S3
+   - Sends completion notifications to stitching queue
+
+4. **AudioStitchingLambda** (Updated with Streaming)
+   - Monitors chunk completion via DynamoDB tracking
+   - **Streaming Architecture**: Processes chunks sequentially to minimize memory usage
+   - Downloads chunks one-by-one and writes to temporary file
+   - Concatenates with 50ms crossfading while maintaining small overlap buffer
+   - Memory usage reduced by 56% (3GB → 1.3GB)
+   - Stores final chapter audio in ProcessedFileBucket
+   - Cleans up intermediate chunk files and temp files
+
+### Supporting Infrastructure
+
+#### SQS Queues
+- **ChapterQueue (FIFO)**: Chapter processing messages from orchestrator
+- **TTSQueue (FIFO)**: Text chunks for TTS generation with DLQ for failures
+- **StitchQueue (FIFO)**: Audio chunk completion notifications
+
+#### DynamoDB
+- **AudioChunkTracking**: Tracks chunk processing completion status
+
+#### ApiStack
 - **REST API**: Provides `/file-upload` POST endpoint via API Gateway
 - **CloudWatch Integration**: Comprehensive logging with custom access log format
 - **IAM Roles**: Proper permissions for API Gateway CloudWatch logging
 
-## Processing Flow
+## Processing Flow (Chunked Architecture)
 
 1. **File Upload** → API Gateway receives file via `/file-upload` endpoint
 2. **Validation** → ValidationLambda validates file type and stores in OriginalFileBucket
-3. **OCR Processing** → S3 event triggers TransformLambda to process file with Mistral OCR API, generates markdown
-4. **Chapter Splitting** → MarkdownFileBucket event triggers ChapterSplitterLambda to split by H1 headers or word count
-5. **TTS Conversion** → ChaptersBucket events trigger TTSLambda to convert each chunk via TTS API
-6. **Storage** → Final audio files stored in ProcessedFileBucket with WAV concatenation and crossfading
+3. **Orchestration** → S3 event triggers OrchestratorLambda to analyze PDF structure
+4. **Chapter Detection** → Identifies chapters via Gemini Vision API and queues in SQS
+5. **Text Extraction** → ChapterTextExtractorLambda extracts text and chunks to 4.5k tokens
+6. **Parallel TTS** → Multiple TTSGenerationLambda instances process chunks with retry logic
+7. **Audio Stitching** → AudioStitchingLambda concatenates chunks with crossfading
+8. **Storage** → Final audio files stored in ProcessedFileBucket
+
+## Key Features of Chunked Architecture
+
+### Reliability
+- **No Lambda Timeouts**: Each chunk processes in <5 minutes
+- **Automatic Retries**: Exponential backoff for API rate limits
+- **Dead Letter Queues**: Failed messages preserved for debugging
+- **Parallel Processing**: Multiple chunks processed simultaneously
+
+### Scalability
+- **Configurable Chunk Size**: Default 4,500 tokens (adjustable)
+- **Reserved Concurrency**: Controls parallel execution limits
+- **Queue-Based Decoupling**: Components scale independently
+
+### Quality
+- **Audio Crossfading**: 50ms crossfade between chunks
+- **Metadata Preservation**: Chapter structure maintained
+- **Automatic Cleanup**: Temporary files removed after processing
 
 ## Development Commands
 
 ### Build and Package
 ```bash
-# Build entire project
-mvn package
+# Build all Python lambdas with dependencies (REQUIRED before CDK deploy)
+./build-python-lambdas.sh
 
-# Build specific lambda
+# Build Java lambdas
+mvn clean package -DskipTests
+
+# Build specific Java lambda
 mvn -f lambdas/file-validation-lambda/pom.xml package
-mvn -f lambdas/file-transform-lambda/pom.xml package
-mvn -f lambdas/chapter-splitter-lambda/pom.xml package
-mvn -f lambdas/file-tts-lambda/pom.xml package
+mvn -f lambdas/presigned-url-lambda/pom.xml package
 
-# Clean build
-mvn clean package
+# Build specific Python lambda (if needed)
+cd lambdas/audio-stitching-lambda && ./package.sh
+cd lambdas/tts-generation-lambda && ./package.sh
 ```
 
 ### CDK Operations
@@ -78,118 +139,207 @@ cdk destroy --all
 # Run all tests
 mvn test
 
-# Run tests for specific module
-mvn -f cdk/pom.xml test
-mvn -f lambdas/file-tts-lambda/pom.xml test
+# Test specific module
+mvn -f lambdas/tts-generation-lambda/pom.xml test
+
+# Local lambda testing
+python lambdas/tts-generation-lambda/handler.py
 ```
 
-## TTS Provider Configuration
-
-The system supports multiple TTS providers through API calls configured via environment variables:
-
-### OpenAI TTS (Default)
-```bash
-export TTS_PROVIDER=OPENAI
-export OPENAI_API_KEY=sk-...
-export TTS_VOICE=alloy
-export TTS_MODEL=tts-1
-export TTS_SPEED=1.0
-```
-
-### Self-Hosted TTS API
-```bash
-export TTS_PROVIDER=SELF_HOSTED
-export TTS_ENDPOINT_URL=https://your-tts-api.com/v1/audio/speech
-export TTS_API_KEY=your-api-key  # Optional
-export TTS_AUTH_HEADER=Authorization  # Optional, defaults to "Authorization"
-export TTS_VOICE=alloy
-export TTS_MODEL=tts-1
-```
-
-### Additional TTS Configuration
-```bash
-export TTS_LANGUAGE=en  # Optional language code
-export TTS_INSTRUCTIONS="Speak clearly and slowly"  # Optional instructions
-export TTS_RESPONSE_FORMAT=wav  # Optional, audio format
-```
-
-## Project Structure
-
-- **Root pom.xml**: Multi-module Maven project with Java 21
-- **cdk/**: CDK infrastructure code
-  - `TtsApp.java`: Main CDK application entry point
-  - `FileFlowStack.java`: S3 buckets and Lambda definitions with TTS provider configuration
-  - `ApiStack.java`: API Gateway REST endpoint configuration
-- **lambdas/**: Individual Lambda function modules
-  - `file-validation-lambda`: File upload validation (PDF/TXT/EPUB)
-  - `file-transform-lambda`: Mistral OCR API integration and markdown generation
-  - `chapter-splitter-lambda`: Chapter detection and TTS-optimized chunking
-  - `file-tts-lambda`: Multi-provider TTS conversion with WAV concatenation
-  - `notification-lambda`: (Not currently integrated)
-
-## Key Implementation Details
-
-### General
-- **Java 21** runtime across all Lambda components
-- **AWS SDK v2** for S3 operations
-- **Apache Commons FileUpload2** for multipart file handling
-- **Account Number**: Hardcoded as `272765753210` in bucket names (configurable via CDK_DEFAULT_ACCOUNT)
-- **Lambda Timeouts**: 5-15 minutes depending on function complexity
-- **S3 Event Triggers**: Automatic processing pipeline via S3 notifications
-
-### TTS Lambda Architecture
-- **Provider Abstraction**: Interface-based design supports multiple TTS providers (FileFlowStack.java:90-132)
-- **Provider Factory**: Dynamic provider instantiation based on `TTS_PROVIDER` environment variable
-- **Supported Providers**:
-  - `OpenAiTtsProvider`: OpenAI TTS API integration
-  - `SelfHostedTtsProvider`: Generic HTTP API integration for self-hosted services
-- **Audio Processing**: WAV concatenation with crossfading for seamless playback
-- **PCM to WAV Conversion**: Handles format conversion for different TTS outputs
-
-### Chapter Splitting Logic
-- **Primary Method**: H1 header detection (`# Chapter Name`) for natural chapter boundaries
-- **Fallback Method**: Word count-based splitting (~5000 words per chunk) when no headers found
-- **Sanitization**: Chapter titles are cleaned for safe filenames
-- **Metadata Generation**: JSON metadata tracks chapter structure and processing info
-
-### OCR Processing
-- **Mistral Pixtral API**: Used for PDF/EPUB OCR with vision capabilities
-- **Consolidated Output**: All pages merged into single markdown file
-- **Ordered Processing**: Segments ordered by index for correct page sequence
-
-## Environment Variables Reference
+## Environment Variables
 
 ### Required for Deployment
-- `MISTRAL_API_KEY`: Mistral API key for OCR processing
-- `OPENAI_API_KEY`: OpenAI API key (if using OpenAI TTS provider)
+- `GEMINI_API_KEY`: Google Gemini API key for text extraction and TTS
 
 ### Optional Configuration
-- `TTS_PROVIDER`: TTS provider type (OPENAI or SELF_HOSTED, default: OPENAI)
-- `TTS_ENDPOINT_URL`: Custom TTS API endpoint (required for SELF_HOSTED)
-- `TTS_API_KEY`: API key for custom TTS endpoint (optional)
-- `TTS_AUTH_HEADER`: HTTP header for authentication (optional, default: "Authorization")
-- `TTS_VOICE`: Voice ID for TTS (provider-specific)
-- `TTS_MODEL`: Model ID for TTS (provider-specific)
-- `TTS_SPEED`: Speech speed multiplier (e.g., 1.0 for normal speed)
-- `TTS_LANGUAGE`: Language code for TTS
-- `TTS_INSTRUCTIONS`: Additional instructions for TTS provider
-- `TTS_RESPONSE_FORMAT`: Audio format (e.g., wav, mp3)
 - `CDK_DEFAULT_ACCOUNT`: AWS account number (default: 272765753210)
 - `CDK_DEFAULT_REGION`: AWS region (default: us-east-1)
 
-## Implementation Status
+### Lambda-Specific Variables
+#### ChapterTextExtractorLambda
+- `GEMINI_TEXT_MODEL`: Text extraction model (default: gemini-2.5-pro)
+- `TTS_QUEUE_URL`: SQS queue for TTS processing
+- `CHUNKS_BUCKET`: S3 bucket for text chunks
+- `MAX_TOKENS_PER_CHUNK`: Token limit per chunk (default: 4500)
 
-- ✅ **ValidationLambda**: Complete file upload validation for PDF/TXT/EPUB
-- ✅ **TransformLambda**: Mistral OCR API integration with markdown generation
-- ✅ **ChapterSplitterLambda**: H1 header detection with word-count fallback
-- ✅ **TTSLambda**: Multi-provider TTS with OpenAI and self-hosted support
-- ✅ **Audio Processing**: WAV concatenation with crossfading
-- ❓ **NotificationLambda**: Exists but not integrated into pipeline
+#### TTSGenerationLambda
+- `GEMINI_TTS_MODEL`: TTS model (default: gemini-2.5-pro-preview-tts)
+- `GEMINI_TTS_VOICE`: Voice selection (default: Charon)
+- `AUDIO_CHUNKS_BUCKET`: S3 bucket for audio chunks
+- `STITCH_QUEUE_URL`: SQS queue for stitching notifications
+- `MAX_RETRY_ATTEMPTS`: Retry attempts for API rate limits (default: 5)
+- `INITIAL_WAIT`: Initial retry wait in seconds (default: 10)
+- `MAX_WAIT`: Maximum retry wait in seconds (default: 120)
+
+#### AudioStitchingLambda
+- `AUDIO_CHUNKS_BUCKET`: S3 bucket for reading audio chunks
+- `PROCESSED_BUCKET_NAME`: S3 bucket for final audio files
+- `TRACKING_TABLE`: DynamoDB table for chunk tracking
+- `CROSSFADE_DURATION_MS`: Crossfade duration in milliseconds (default: 50)
+
+## Project Structure
+
+```
+microservice-tts/
+├── cdk/                                # CDK infrastructure code
+│   └── src/main/java/com/myorg/
+│       ├── TtsApp.java                 # Main CDK application
+│       ├── FileFlowStack.java          # S3 buckets and Lambda definitions
+│       └── ApiStack.java               # API Gateway configuration
+├── lambdas/
+│   ├── orchestrator-lambda/            # PDF analysis and chapter detection
+│   ├── chapter-text-extractor-lambda/  # Text extraction and chunking
+│   │   ├── handler.py                  # Current implementation
+│   │   └── handler_updated.py          # New chunked implementation
+│   ├── tts-generation-lambda/          # TTS generation with retry logic
+│   │   ├── handler.py
+│   │   └── requirements.txt
+│   └── audio-stitching-lambda/         # Audio concatenation with crossfading
+│       ├── handler.py
+│       └── requirements.txt
+└── pom.xml                             # Multi-module Maven configuration
+```
+
+## Implementation Details
+
+### Chunking Strategy
+- **Token Limit**: 4,500 tokens per chunk (configurable)
+- **Text Encoding**: Uses tiktoken (cl100k_base) for accurate token counting
+- **Fallback**: Character-based chunking if tiktoken unavailable
+
+### Rate Limiting Strategy (TTSGenerationLambda)
+
+**Gemini TTS API Limit**: 10,000 tokens per minute
+
+**Implementation**:
+1. **Concurrency Limit**: Reserved concurrency set to 2 (reduced from 20)
+   - Max theoretical usage: 2 × 4,500 tokens = 9,000 tokens/minute
+   - Stays safely under 10k limit
+2. **Token-Based Delay**: Each lambda calculates delay before API call
+   - Formula: `delay = (estimated_tokens / 10000) × 60 seconds`
+   - Example: 4,500 tokens → 27 second delay
+   - Spreads requests over time to prevent bursts
+3. **Exponential Backoff**: Still active for handling temporary rate limit errors
+
+**Token Estimation**:
+```python
+word_count = len(chunk_text.split())
+estimated_tokens = int(word_count * 1.3)  # ~1 token per 0.75 words
+delay_seconds = (estimated_tokens / 10000) * 60
+```
+
+### Retry Logic (TTSGenerationLambda)
+```python
+@retry(
+    stop=stop_after_attempt(5),
+    wait=wait_exponential(multiplier=2, min=10, max=120),
+    retry=retry_if_exception_type(ClientError)
+)
+def generate_speech_with_retry(...):
+    # TTS generation with automatic retry
+```
+
+### Audio Processing
+- **Format**: WAV, 24kHz, 16-bit, mono
+- **Crossfading**: Linear interpolation over 50ms
+- **Parallel Downloads**: ThreadPoolExecutor for chunk retrieval
+- **Memory Management**: 2GB for stitching lambda
+
+### Error Handling
+- **Rate Limits**: Exponential backoff with jitter
+- **Failed Chunks**: Dead letter queue for investigation
+- **Partial Failures**: DynamoDB tracking ensures consistency
+- **Cleanup**: Automatic removal of temporary files
+
+## Performance Characteristics
+
+### Processing Times (Typical)
+- **Text Extraction**: 10-30 seconds per chapter
+- **Chunking**: <1 second per chapter
+- **TTS Generation**: 20-60 seconds per chunk
+- **Audio Stitching**: 10-30 seconds per chapter
+- **Total**: 2-5 minutes per chapter (parallel processing)
+
+### Resource Usage
+- **Lambda Memory**: 512MB-2GB depending on function
+- **S3 Storage**: ~10MB per chapter (final audio)
+- **API Calls**: 1 text extraction + N TTS calls per chapter
+
+### Cost Optimization
+- **Reserved Concurrency**: Prevents runaway costs
+- **Lifecycle Rules**: Auto-cleanup of temporary files
+- **DynamoDB On-Demand**: Pay-per-use pricing
+- **SQS FIFO**: Prevents duplicate processing
+
+## Troubleshooting
+
+### Common Issues
+
+#### Lambda Timeouts
+- **Symptom**: Function times out after 15 minutes
+- **Solution**: Implemented chunking to process smaller segments
+
+#### API Rate Limits (MITIGATED)
+- **Symptom**: 429 RESOURCE_EXHAUSTED errors from Gemini TTS API
+- **Root Cause**: 10,000 tokens/minute limit
+- **Solution Implemented**:
+  - Reserved concurrency reduced from 20 to 2
+  - Token-based delay added before each API call
+  - Exponential backoff retry logic for transient errors
+- **Expected Behavior**: Should rarely hit rate limits now
+
+#### Memory Issues (RESOLVED with Streaming)
+- **Previous Issue**: Lambda ran out of memory (3GB) during parallel chunk processing
+- **Solution Implemented**: Sequential streaming approach in AudioStitchingLambda
+- **Results**: Memory usage reduced from 3GB to 1.3GB (56% reduction)
+- **Details**: Processes chunks one-by-one, writes to /tmp, maintains small overlap buffer
+- **Fallback**: If issues persist, check chunk sizes and /tmp usage (512MB limit)
+
+#### Missing Chunks
+- **Symptom**: Final audio missing sections
+- **Solution**: DynamoDB tracking ensures all chunks processed
+
+### Monitoring
+```bash
+# Check TTS queue depth
+aws sqs get-queue-attributes --queue-url <TTS_QUEUE_URL> --attribute-names ApproximateNumberOfMessages
+
+# Monitor lambda logs
+aws logs tail /aws/lambda/FileFlowStack-TTSGenerationLambda --follow
+
+# Check DynamoDB tracking
+aws dynamodb scan --table-name AudioChunkTracking
+```
+
+## Migration from Monolithic to Chunked Architecture
+
+### Key Changes
+1. **Reduced chunk size**: 9,000 → 4,500 tokens
+2. **Split TTS processing**: Single lambda → Three specialized lambdas
+3. **Added retry logic**: Handles API rate limits gracefully
+4. **Parallel processing**: Multiple chunks processed simultaneously
+5. **Audio crossfading**: Smooth transitions between chunks
+
+### Backwards Compatibility
+- Existing S3 buckets maintained
+- Final output format unchanged
+- API endpoints remain the same
+
+## Future Enhancements
+
+- [ ] Dynamic chunk size based on content complexity
+- [ ] Multi-language TTS support
+- [ ] Real-time processing status via WebSocket
+- [ ] Batch processing optimization
+- [ ] Cost analysis dashboard
+- [ ] Alternative TTS provider support (OpenAI, AWS Polly)
+- [ ] Audio format options (MP3, OGG)
+- [ ] Variable speed playback markers
 
 ## Notes
 
-- **API-Based Architecture**: All TTS processing happens via API calls from Lambda (no EC2 infrastructure required)
-- **Cost Optimization**: Pay-per-use API pricing, no persistent compute resources
-- **Bucket Versioning**: Disabled across all S3 buckets for cost savings
-- **Chapter Detection**: Prioritizes natural chapter breaks (H1) over arbitrary word count splits
-- **Audio Quality**: Crossfading prevents audible gaps between concatenated chunks
+- **API Quotas**: Monitor Gemini API usage to avoid rate limits
+- **Concurrency Limits**: Adjust reserved concurrency based on API quotas
+- **Storage Costs**: Implement lifecycle policies for temporary files
+- **Security**: API keys stored in environment variables, consider AWS Secrets Manager
+- **Monitoring**: CloudWatch alarms recommended for production deployments

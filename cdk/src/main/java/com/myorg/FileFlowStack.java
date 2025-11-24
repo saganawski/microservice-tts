@@ -9,11 +9,21 @@ import software.amazon.awscdk.services.iam.ServicePrincipal;
 import software.amazon.awscdk.services.lambda.Code;
 import software.amazon.awscdk.services.lambda.Function;
 import software.amazon.awscdk.services.lambda.Runtime;
+import software.amazon.awscdk.services.lambda.eventsources.SqsEventSource;
 import software.amazon.awscdk.services.s3.Bucket;
 import software.amazon.awscdk.services.s3.EventType;
+import software.amazon.awscdk.services.s3.NotificationKeyFilter;
 import software.amazon.awscdk.services.s3.notifications.LambdaDestination;
 import software.amazon.awscdk.services.sns.Topic;
 import software.amazon.awscdk.services.sns.subscriptions.LambdaSubscription;
+import software.amazon.awscdk.services.sqs.DeadLetterQueue;
+import software.amazon.awscdk.services.sqs.DeduplicationScope;
+import software.amazon.awscdk.services.sqs.FifoThroughputLimit;
+import software.amazon.awscdk.services.sqs.Queue;
+import software.amazon.awscdk.services.dynamodb.Table;
+import software.amazon.awscdk.services.dynamodb.Attribute;
+import software.amazon.awscdk.services.dynamodb.AttributeType;
+import software.amazon.awscdk.services.dynamodb.BillingMode;
 import software.constructs.Construct;
 
 import java.util.List;
@@ -22,6 +32,7 @@ import java.util.Map;
 
 public class FileFlowStack extends Stack {
     private final Function validationLambda;
+    private final Function presignedUrlLambda;
 
     public FileFlowStack(final Construct scope, final String id, final StackProps props) {
 
@@ -62,6 +73,21 @@ public class FileFlowStack extends Stack {
         // Grant permissions to the lambda functions to access the S3 buckets
         originalFileBucket.grantPut(validationLambda);
 
+        // Pre-signed URL Lambda for large file uploads
+        presignedUrlLambda = Function.Builder.create(this, "PresignedUrlLambda")
+                .runtime(software.amazon.awscdk.services.lambda.Runtime.JAVA_21)
+                .code(Code.fromAsset("lambdas/presigned-url-lambda/target/presigned-url-lambda.jar"))
+                .handler("com.myorg.PresignedUrlLambda::handleRequest")
+                .environment(Map.of(
+                        "ORIGINAL_BUCKET_NAME", originalFileBucket.getBucketName()))
+                .timeout(Duration.seconds(30))
+                .memorySize(512)
+                .build();
+
+        // Grant permissions for pre-signed URL Lambda
+        originalFileBucket.grantPut(presignedUrlLambda);
+        originalFileBucket.grantPutAcl(presignedUrlLambda);
+
         // ============================================================
         // OLD PIPELINE (Mistral API) - DISABLED
         // To revert: uncomment this block and comment out NEW PIPELINE
@@ -100,10 +126,11 @@ public class FileFlowStack extends Stack {
         */
 
         // ============================================================
-        // NEW PIPELINE (AWS Textract + Bedrock) - ACTIVE
-        // To disable: comment out this entire block
+        // TEXTRACT PIPELINE - DISABLED (replaced by Gemini pipeline)
+        // This pipeline used AWS Textract + Bedrock for processing
+        // Kept for reference but no longer deployed
         // ============================================================
-
+        /*
         // SNS Topic for Textract completion notifications
         final Topic textractCompletionTopic = Topic.Builder.create(this, "TextractCompletionTopic")
                 .topicName("textract-completion-topic")
@@ -190,7 +217,13 @@ public class FileFlowStack extends Stack {
                         "arn:aws:bedrock:us-east-2::foundation-model/anthropic.claude-sonnet-4-5-20250929-v1:0",
                         "arn:aws:bedrock:us-west-2::foundation-model/anthropic.claude-sonnet-4-5-20250929-v1:0"))
                 .build());
+        */
 
+        // ============================================================
+        // OLD TTS CONFIGURATIONS - DISABLED
+        // These were used with the Textract pipeline
+        // ============================================================
+        /*
         // TTS lambda with configurable provider support
         Map<String, String> ttsEnvironment = new java.util.HashMap<>();
         ttsEnvironment.put("MARKDOWN_BUCKET_NAME", chaptersBucket.getBucketName());
@@ -265,6 +298,7 @@ public class FileFlowStack extends Stack {
         // Grant S3 permissions for Gemini TTS Lambda
         chaptersBucket.grantRead(geminiTtsLambda);
         processedFileBucket.grantPut(geminiTtsLambda);
+        */
 
         // ============================================================
         // S3 EVENT NOTIFICATIONS
@@ -274,15 +308,240 @@ public class FileFlowStack extends Stack {
         // originalFileBucket.addEventNotification(EventType.OBJECT_CREATED, new LambdaDestination(transformLambda));
         // markdownFileBucket.addEventNotification(EventType.OBJECT_CREATED, new LambdaDestination(chapterSplitterLambda));
 
-        // NEW PIPELINE EVENT NOTIFICATIONS - ACTIVE
-        originalFileBucket.addEventNotification(EventType.OBJECT_CREATED, new LambdaDestination(textractExtractorLambda));
-        markdownFileBucket.addEventNotification(EventType.OBJECT_CREATED, new LambdaDestination(bedrockChapterLambda));
+        // TEXTRACT PIPELINE EVENT NOTIFICATIONS - DISABLED (replaced by Gemini pipeline)
+        // originalFileBucket.addEventNotification(EventType.OBJECT_CREATED, new LambdaDestination(textractExtractorLambda));
+        // markdownFileBucket.addEventNotification(EventType.OBJECT_CREATED, new LambdaDestination(bedrockChapterLambda));
+        // chaptersBucket.addEventNotification(EventType.OBJECT_CREATED, new LambdaDestination(geminiTtsLambda));
 
-        // TTS trigger remains unchanged (works with both pipelines)
-        chaptersBucket.addEventNotification(EventType.OBJECT_CREATED, new LambdaDestination(geminiTtsLambda));
+        // ============================================================
+        // GEMINI FLOW - Full Gemini Vision + TTS Pipeline
+        // Uses Gemini for PDF analysis, text extraction, and TTS
+        // ============================================================
+
+        // Create bucket for Gemini flow uploads (separate from original bucket)
+        final Bucket geminiUploadBucket = Bucket.Builder.create(this, "GeminiUploadBucket")
+                .bucketName("gemini-upload-bucket" + accountNumber)
+                .versioned(false)
+                .build();
+
+        // Create text bucket for extracted text storage (optional, for debugging/caching)
+        final Bucket geminiTextBucket = Bucket.Builder.create(this, "GeminiTextBucket")
+                .bucketName("gemini-text-bucket" + accountNumber)
+                .versioned(false)
+                .build();
+
+        // ============================================================
+        // CHUNKED ARCHITECTURE - NEW INFRASTRUCTURE
+        // ============================================================
+
+        // Create bucket for text chunks (temporary storage)
+        final Bucket textChunksBucket = Bucket.Builder.create(this, "TextChunksBucket")
+                .bucketName("text-chunks-bucket" + accountNumber)
+                .versioned(false)
+                .removalPolicy(software.amazon.awscdk.RemovalPolicy.DESTROY)
+                .autoDeleteObjects(true)
+                .lifecycleRules(List.of(software.amazon.awscdk.services.s3.LifecycleRule.builder()
+                        .expiration(Duration.days(7))  // Clean up after 7 days
+                        .build()))
+                .build();
+
+        // Create bucket for audio chunks (temporary storage)
+        final Bucket audioChunksBucket = Bucket.Builder.create(this, "AudioChunksBucket")
+                .bucketName("audio-chunks-bucket" + accountNumber)
+                .versioned(false)
+                .lifecycleRules(List.of(software.amazon.awscdk.services.s3.LifecycleRule.builder()
+                        .expiration(Duration.days(7))  // Clean up after 7 days
+                        .build()))
+                .build();
+
+        // Create DynamoDB table for tracking chunk completion
+        final Table chunkTrackingTable = Table.Builder.create(this, "AudioChunkTracking")
+                .tableName("AudioChunkTracking")
+                .partitionKey(Attribute.builder()
+                        .name("chapter_key")
+                        .type(AttributeType.STRING)
+                        .build())
+                .billingMode(BillingMode.PAY_PER_REQUEST)
+                .timeToLiveAttribute("ttl")
+                .build();
+
+        // SQS FIFO Queue for TTS processing
+        final Queue ttsQueue = Queue.Builder.create(this, "TTSProcessingQueue")
+                .queueName("tts-processing-queue.fifo")
+                .fifo(true)
+                .contentBasedDeduplication(true)
+                .deduplicationScope(DeduplicationScope.MESSAGE_GROUP)
+                .fifoThroughputLimit(FifoThroughputLimit.PER_MESSAGE_GROUP_ID)
+                .visibilityTimeout(Duration.minutes(16))  // Must be >= Lambda timeout (15 min) + buffer
+                .retentionPeriod(Duration.days(14))
+                .deadLetterQueue(software.amazon.awscdk.services.sqs.DeadLetterQueue.builder()
+                        .queue(Queue.Builder.create(this, "TTSProcessingDLQ")
+                                .queueName("tts-dlq.fifo")
+                                .fifo(true)
+                                .build())
+                        .maxReceiveCount(3)
+                        .build())
+                .build();
+
+        // SQS FIFO Queue for stitching notifications
+        final Queue stitchQueue = Queue.Builder.create(this, "StitchNotificationQueue")
+                .queueName("stitch-notification-queue.fifo")
+                .fifo(true)
+                .contentBasedDeduplication(true)
+                .visibilityTimeout(Duration.minutes(11))  // 10 min processing + buffer
+                .build();
+
+        // Dead Letter Queue for failed chapter processing
+        final Queue chapterDLQ = Queue.Builder.create(this, "ChapterDLQ")
+                .queueName("chapter-processing-dlq.fifo")
+                .fifo(true)
+                .contentBasedDeduplication(true)
+                .retentionPeriod(Duration.days(14))
+                .build();
+
+        // SQS FIFO Queue for chapter processing messages with retry and DLQ
+        final Queue chapterQueue = Queue.Builder.create(this, "ChapterQueue")
+                .queueName("chapter-processing-queue.fifo")
+                .fifo(true)
+                .contentBasedDeduplication(true)
+                .deduplicationScope(DeduplicationScope.MESSAGE_GROUP)
+                .fifoThroughputLimit(FifoThroughputLimit.PER_MESSAGE_GROUP_ID)
+                .visibilityTimeout(Duration.minutes(15))  // 10 min for text extraction + 5 min buffer
+                .retentionPeriod(Duration.days(14))
+                .deadLetterQueue(DeadLetterQueue.builder()
+                        .queue(chapterDLQ)
+                        .maxReceiveCount(3)  // Retry failed chapters 3 times before moving to DLQ
+                        .build())
+                .build();
+
+        // Orchestrator Lambda - Analyzes PDF structure and queues chapters
+        final Function orchestratorLambda = Function.Builder.create(this, "OrchestratorLambda")
+                .runtime(Runtime.PYTHON_3_12)
+                .code(Code.fromAsset("lambdas/orchestrator-lambda"))
+                .handler("handler.lambda_handler")
+                .environment(Map.of(
+                        "GEMINI_API_KEY", System.getenv("GEMINI_API_KEY") != null ? System.getenv("GEMINI_API_KEY") : "",
+                        "CHAPTER_QUEUE_URL", chapterQueue.getQueueUrl(),
+                        "TEXT_BUCKET", geminiTextBucket.getBucketName()))
+                .timeout(Duration.minutes(15))  // PDF upload and analysis can take time
+                .memorySize(1024)
+                .build();
+
+        // Grant permissions for Orchestrator Lambda
+        originalFileBucket.grantRead(orchestratorLambda);  // Read from original bucket where files are validated
+        geminiUploadBucket.grantRead(orchestratorLambda);  // Keep for backward compatibility
+        geminiTextBucket.grantPut(orchestratorLambda);  // For metadata storage
+        chapterQueue.grantSendMessages(orchestratorLambda);
+
+        // Chapter Text Extractor Lambda - Only extracts text and chunks (no TTS)
+        // CRITICAL: Limited to 2 concurrent executions to prevent API quota exhaustion
+        // Gemini API limit: 1M tokens/minute for gemini-3-pro
+        // Each chapter: ~200k tokens
+        // 2 concurrent × 200k = 400k tokens/minute (safely under 1M limit)
+        final Function chapterTextExtractorLambda = Function.Builder.create(this, "ChapterTextExtractorLambda")
+                .runtime(Runtime.PYTHON_3_12)
+                .code(Code.fromAsset("lambdas/chapter-text-extractor-lambda"))
+                .handler("handler.lambda_handler")  // Use main handler with retry logic
+                .environment(Map.of(
+                        "GEMINI_API_KEY", System.getenv("GEMINI_API_KEY") != null ? System.getenv("GEMINI_API_KEY") : "",
+                        "TEXT_CHUNKS_BUCKET", textChunksBucket.getBucketName(),  // Use dedicated text chunks bucket
+                        "TTS_QUEUE_URL", ttsQueue.getQueueUrl(),
+                        "GEMINI_TEXT_MODEL", "gemini-3-pro-preview",
+                        "MAX_TOKENS_PER_CHUNK", "4500"))  // Reduced chunk size
+                .timeout(Duration.minutes(10))  // Text extraction and chunking only
+                .memorySize(1024)  // Less memory needed without audio processing
+                .reservedConcurrentExecutions(2)  // CRITICAL: Limit to 2 to prevent API quota exhaustion
+                .build();
+
+        // Grant permissions for Chapter Text Extractor Lambda
+        geminiTextBucket.grantReadWrite(chapterTextExtractorLambda);
+        textChunksBucket.grantReadWrite(chapterTextExtractorLambda);  // For storing text chunks
+        ttsQueue.grantSendMessages(chapterTextExtractorLambda);
+
+        // Add SQS trigger to Chapter Text Extractor Lambda with batch failure reporting
+        // This enables automatic retry of failed messages via batchItemFailures response
+        chapterTextExtractorLambda.addEventSource(SqsEventSource.Builder.create(chapterQueue)
+                .batchSize(1)  // Process one chapter at a time for better error handling
+                .reportBatchItemFailures(true)  // Enable partial batch failure responses for retry
+                .build());
+
+        // TTS Generation Lambda - Processes individual text chunks
+        // Rate Limited: Gemini TTS API has 10,000 tokens/minute limit
+        // With 2 concurrent executions × 4,500 tokens = 9,000 tokens/minute (safely under limit)
+        final Function ttsGenerationLambda = Function.Builder.create(this, "TTSGenerationLambda")
+                .runtime(Runtime.PYTHON_3_12)
+                .code(Code.fromAsset("lambdas/tts-generation-lambda"))
+                .handler("handler.lambda_handler")
+                .environment(Map.of(
+                        "GEMINI_API_KEY", System.getenv("GEMINI_API_KEY") != null ? System.getenv("GEMINI_API_KEY") : "",
+                        "AUDIO_CHUNKS_BUCKET", audioChunksBucket.getBucketName(),
+                        "TEXT_CHUNKS_BUCKET", textChunksBucket.getBucketName(),  // Use dedicated text chunks bucket
+                        "STITCH_QUEUE_URL", stitchQueue.getQueueUrl(),
+                        "GEMINI_TTS_MODEL", "gemini-2.5-pro-preview-tts",
+                        "GEMINI_TTS_VOICE", "Charon",
+                        "MAX_RETRY_ATTEMPTS", "5",
+                        "INITIAL_WAIT", "10",
+                        "MAX_WAIT", "120"))
+                .timeout(Duration.minutes(15))  // Max timeout for large chunks
+                .memorySize(2048)  // Higher memory for better performance
+                .reservedConcurrentExecutions(2)  // Reduced from 20 to stay under 10k tokens/min rate limit
+                .build();
+
+        // Grant permissions for TTS Generation Lambda
+        geminiTextBucket.grantRead(ttsGenerationLambda);
+        textChunksBucket.grantRead(ttsGenerationLambda);  // For reading text chunks
+        audioChunksBucket.grantPut(ttsGenerationLambda);
+        stitchQueue.grantSendMessages(ttsGenerationLambda);
+
+        // Add SQS trigger to TTS Generation Lambda
+        ttsGenerationLambda.addEventSource(SqsEventSource.Builder.create(ttsQueue)
+                .batchSize(1)  // Process one chunk at a time
+                .build());
+
+        // Audio Stitching Lambda - Concatenates audio chunks
+        // Uses streaming approach to process chunks sequentially, reducing memory usage
+        // from 3008MB to ~1331MB. Processes chunks one-by-one and writes to temp file
+        // in /tmp (512MB available) before uploading final audio to S3.
+        final Function audioStitchingLambda = Function.Builder.create(this, "AudioStitchingLambda")
+                .runtime(Runtime.PYTHON_3_12)
+                .code(Code.fromAsset("lambdas/audio-stitching-lambda"))
+                .handler("handler.lambda_handler")
+                .environment(Map.of(
+                        "AUDIO_CHUNKS_BUCKET", audioChunksBucket.getBucketName(),
+                        "PROCESSED_BUCKET_NAME", processedFileBucket.getBucketName(),
+                        "TRACKING_TABLE", chunkTrackingTable.getTableName(),
+                        "CROSSFADE_DURATION_MS", "50"))
+                .timeout(Duration.minutes(10))  // Concatenation can take time
+                .memorySize(3008)  // Set to max for safety, but streaming only uses ~1331MB
+                .reservedConcurrentExecutions(5)
+                .build();
+
+        // Grant permissions for Audio Stitching Lambda
+        audioChunksBucket.grantRead(audioStitchingLambda);
+        audioChunksBucket.grantDelete(audioStitchingLambda);  // Clean up chunks after stitching
+        processedFileBucket.grantPut(audioStitchingLambda);
+        chunkTrackingTable.grantReadWriteData(audioStitchingLambda);
+
+        // Add SQS trigger to Audio Stitching Lambda
+        audioStitchingLambda.addEventSource(SqsEventSource.Builder.create(stitchQueue)
+                .batchSize(1)
+                .build());
+
+        // S3 Event Notification: Trigger Orchestrator when PDF uploaded to original bucket (after validation)
+        originalFileBucket.addEventNotification(
+                EventType.OBJECT_CREATED,
+                new LambdaDestination(orchestratorLambda),
+                NotificationKeyFilter.builder()
+                        .suffix(".pdf")
+                        .build()
+        );
     }
 
     public Function getValidationLambda() {
         return validationLambda;
+    }
+
+    public Function getPresignedUrlLambda() {
+        return presignedUrlLambda;
     }
 }

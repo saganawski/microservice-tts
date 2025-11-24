@@ -1,0 +1,636 @@
+============================================================
+AWS TEXTRACT - LORE PDF EXTRACTION TEST
+============================================================
+PDF: s3://original-file-bucket272765753210/lore-book-trimmed-2-compressed.pdf
+Started: 2025-11-23T18:06:02.036487
+
+✓ PDF found in S3
+Starting Textract job for s3://original-file-bucket272765753210/lore-book-trimmed-2-compressed.pdf
+Textract Job ID: 2ccae39372c1e02264d75d84e32090de21073c8f5e5a215c210b2003aea5d286
+Polling for job completion: 2ccae39372c1e02264d75d84e32090de21073c8f5e5a215c210b2003aea5d286
+Job status: IN_PROGRESS
+Job status: IN_PROGRESS
+Job status: IN_PROGRESS
+Job status: IN_PROGRESS
+Job status: IN_PROGRESS
+Job status: IN_PROGRESS
+Job status: IN_PROGRESS
+Job status: IN_PROGRESS
+Job status: IN_PROGRESS
+Job status: IN_PROGRESS
+Job status: IN_PROGRESS
+Job status: IN_PROGRESS
+Job status: IN_PROGRESS
+Job status: IN_PROGRESS
+Job status: IN_PROGRESS
+Job status: IN_PROGRESS
+Job status: IN_PROGRESS
+Job status: IN_PROGRESS
+Job status: IN_PROGRESS
+Job status: IN_PROGRESS
+Job status: IN_PROGRESS
+Job status: IN_PROGRESS
+Job status: IN_PROGRESS
+Job status: IN_PROGRESS
+Job status: IN_PROGRESS
+Job status: IN_PROGRESS
+Job status: IN_PROGRESS
+Job status: IN_PROGRESS
+Job status: IN_PROGRESS
+Job status: IN_PROGRESS
+Job status: IN_PROGRESS
+Job status: IN_PROGRESS
+Job status: SUCCEEDED
+Collecting results...
+Retrieved page 1 of results (1000 blocks)
+Retrieved page 2 of results (1000 blocks)
+Retrieved page 3 of results (1000 blocks)
+Retrieved page 4 of results (1000 blocks)
+Retrieved page 5 of results (1000 blocks)
+Retrieved page 6 of results (1000 blocks)
+Retrieved page 7 of results (1000 blocks)
+Retrieved page 8 of results (1000 blocks)
+Retrieved page 9 of results (1000 blocks)
+Retrieved page 10 of results (1000 blocks)
+Retrieved page 11 of results (1000 blocks)
+Retrieved page 12 of results (1000 blocks)
+Retrieved page 13 of results (1000 blocks)
+Retrieved page 14 of results (1000 blocks)
+Retrieved page 15 of results (1000 blocks)
+Retrieved page 16 of results (1000 blocks)
+Retrieved page 17 of results (1000 blocks)
+Retrieved page 18 of results (1000 blocks)
+Retrieved page 19 of results (1000 blocks)
+Retrieved page 20 of results (1000 blocks)
+Retrieved page 21 of results (1000 blocks)
+Retrieved page 22 of results (1000 blocks)
+Retrieved page 23 of results (1000 blocks)
+Retrieved page 24 of results (1000 blocks)
+Retrieved page 25 of results (1000 blocks)
+Retrieved page 26 of results (1000 blocks)
+Retrieved page 27 of results (1000 blocks)
+Retrieved page 28 of results (1000 blocks)
+Retrieved page 29 of results (1000 blocks)
+Retrieved page 30 of results (1000 blocks)
+Retrieved page 31 of results (1000 blocks)
+Retrieved page 32 of results (1000 blocks)
+Retrieved page 33 of results (1000 blocks)
+Retrieved page 34 of results (1000 blocks)
+Retrieved page 35 of results (1000 blocks)
+Retrieved page 36 of results (1000 blocks)
+Retrieved page 37 of results (1000 blocks)
+Retrieved page 38 of results (1000 blocks)
+Retrieved page 39 of results (1000 blocks)
+Retrieved page 40 of results (1000 blocks)
+Retrieved page 41 of results (1000 blocks)
+Retrieved page 42 of results (1000 blocks)
+Retrieved page 43 of results (1000 blocks)
+Retrieved page 44 of results (1000 blocks)
+Retrieved page 45 of results (1000 blocks)
+Retrieved page 46 of results (1000 blocks)
+Retrieved page 47 of results (1000 blocks)
+Retrieved page 48 of results (1000 blocks)
+Retrieved page 49 of results (1000 blocks)
+Retrieved page 50 of results (1000 blocks)
+Retrieved page 51 of results (1000 blocks)
+Retrieved page 52 of results (1000 blocks)
+Retrieved page 53 of results (1000 blocks)
+Retrieved page 54 of results (1000 blocks)
+Retrieved page 55 of results (1000 blocks)
+Retrieved page 56 of results (1000 blocks)
+Retrieved page 57 of results (1000 blocks)
+Retrieved page 58 of results (1000 blocks)
+Retrieved page 59 of results (1000 blocks)
+Retrieved page 60 of results (1000 blocks)
+Retrieved page 61 of results (1000 blocks)
+Retrieved page 62 of results (1000 blocks)
+Retrieved page 63 of results (1000 blocks)
+Retrieved page 64 of results (1000 blocks)
+Retrieved page 65 of results (1000 blocks)
+Retrieved page 66 of results (1000 blocks)
+Retrieved page 67 of results (1000 blocks)
+Retrieved page 68 of results (1000 blocks)
+Retrieved page 69 of results (1000 blocks)
+Retrieved page 70 of results (1000 blocks)
+Retrieved page 71 of results (1000 blocks)
+Retrieved page 72 of results (1000 blocks)
+Retrieved page 73 of results (1000 blocks)
+Retrieved page 74 of results (1000 blocks)
+Retrieved page 75 of results (1000 blocks)
+Retrieved page 76 of results (1000 blocks)
+Retrieved page 77 of results (1000 blocks)
+Retrieved page 78 of results (1000 blocks)
+Retrieved page 79 of results (1000 blocks)
+Retrieved page 80 of results (1000 blocks)
+Retrieved page 81 of results (1000 blocks)
+Retrieved page 82 of results (1000 blocks)
+Retrieved page 83 of results (1000 blocks)
+Retrieved page 84 of results (1000 blocks)
+Retrieved page 85 of results (1000 blocks)
+Retrieved page 86 of results (1000 blocks)
+Retrieved page 87 of results (1000 blocks)
+Retrieved page 88 of results (1000 blocks)
+Retrieved page 89 of results (1000 blocks)
+Retrieved page 90 of results (1000 blocks)
+Retrieved page 91 of results (1000 blocks)
+Retrieved page 92 of results (1000 blocks)
+Retrieved page 93 of results (1000 blocks)
+Retrieved page 94 of results (1000 blocks)
+Retrieved page 95 of results (1000 blocks)
+Retrieved page 96 of results (1000 blocks)
+Retrieved page 97 of results (1000 blocks)
+Retrieved page 98 of results (1000 blocks)
+Retrieved page 99 of results (1000 blocks)
+Retrieved page 100 of results (1000 blocks)
+Retrieved page 101 of results (1000 blocks)
+Retrieved page 102 of results (1000 blocks)
+Retrieved page 103 of results (1000 blocks)
+Retrieved page 104 of results (1000 blocks)
+Retrieved page 105 of results (1000 blocks)
+Retrieved page 106 of results (1000 blocks)
+Retrieved page 107 of results (1000 blocks)
+Retrieved page 108 of results (1000 blocks)
+Retrieved page 109 of results (1000 blocks)
+Retrieved page 110 of results (1000 blocks)
+Retrieved page 111 of results (1000 blocks)
+Retrieved page 112 of results (1000 blocks)
+Retrieved page 113 of results (1000 blocks)
+Retrieved page 114 of results (1000 blocks)
+Retrieved page 115 of results (1000 blocks)
+Retrieved page 116 of results (1000 blocks)
+Retrieved page 117 of results (1000 blocks)
+Retrieved page 118 of results (1000 blocks)
+Retrieved page 119 of results (1000 blocks)
+Retrieved page 120 of results (1000 blocks)
+Retrieved page 121 of results (1000 blocks)
+Retrieved page 122 of results (1000 blocks)
+Retrieved page 123 of results (1000 blocks)
+Retrieved page 124 of results (1000 blocks)
+Retrieved page 125 of results (1000 blocks)
+Retrieved page 126 of results (1000 blocks)
+Retrieved page 127 of results (1000 blocks)
+Retrieved page 128 of results (1000 blocks)
+Retrieved page 129 of results (1000 blocks)
+Retrieved page 130 of results (1000 blocks)
+Retrieved page 131 of results (1000 blocks)
+Retrieved page 132 of results (1000 blocks)
+Retrieved page 133 of results (1000 blocks)
+Retrieved page 134 of results (1000 blocks)
+Retrieved page 135 of results (1000 blocks)
+Retrieved page 136 of results (1000 blocks)
+Retrieved page 137 of results (1000 blocks)
+Retrieved page 138 of results (1000 blocks)
+Retrieved page 139 of results (1000 blocks)
+Retrieved page 140 of results (1000 blocks)
+Retrieved page 141 of results (1000 blocks)
+Retrieved page 142 of results (1000 blocks)
+Retrieved page 143 of results (1000 blocks)
+Retrieved page 144 of results (1000 blocks)
+Retrieved page 145 of results (1000 blocks)
+Retrieved page 146 of results (424 blocks)
+Total blocks retrieved: 145424
+Extracting text from blocks...
+
+Saving raw results to: /tmp/textract_lore_results.json
+Saving extracted text to: /tmp/textract_lore_text.txt
+
+============================================================
+TEXTRACT ANALYSIS
+============================================================
+
+Block Types:
+  LINE: 13332
+  PAGE: 391
+  WORD: 131701
+
+Total Pages: 391
+  Page 1: 2 lines, 14 characters
+  Page 2: 24 lines, 1415 characters
+  Page 3: 36 lines, 2160 characters
+  Page 4: 36 lines, 2142 characters
+  Page 5: 14 lines, 774 characters
+  Page 6: 5 lines, 51 characters
+  Page 7: 24 lines, 1344 characters
+  Page 8: 36 lines, 2169 characters
+  Page 9: 36 lines, 2113 characters
+  Page 10: 36 lines, 2205 characters
+  Page 11: 36 lines, 2171 characters
+  Page 12: 36 lines, 2168 characters
+  Page 13: 36 lines, 2209 characters
+  Page 14: 33 lines, 1646 characters
+  Page 15: 36 lines, 2248 characters
+  Page 16: 33 lines, 1975 characters
+  Page 17: 35 lines, 2107 characters
+  Page 18: 36 lines, 2176 characters
+  Page 19: 36 lines, 2212 characters
+  Page 20: 36 lines, 2181 characters
+  Page 21: 36 lines, 2230 characters
+  Page 22: 36 lines, 2236 characters
+  Page 23: 36 lines, 2156 characters
+  Page 24: 36 lines, 2234 characters
+  Page 25: 36 lines, 2186 characters
+  Page 26: 36 lines, 2211 characters
+  Page 27: 30 lines, 1563 characters
+  Page 28: 36 lines, 2177 characters
+  Page 29: 36 lines, 2186 characters
+  Page 30: 36 lines, 2216 characters
+  Page 31: 36 lines, 2154 characters
+  Page 32: 36 lines, 2147 characters
+  Page 33: 36 lines, 2155 characters
+  Page 34: 36 lines, 2197 characters
+  Page 35: 36 lines, 2171 characters
+  Page 36: 36 lines, 2216 characters
+  Page 37: 34 lines, 1956 characters
+  Page 38: 36 lines, 2200 characters
+  Page 39: 36 lines, 2187 characters
+  Page 40: 36 lines, 2237 characters
+  Page 41: 33 lines, 1788 characters
+  Page 42: 36 lines, 2134 characters
+  Page 43: 36 lines, 2181 characters
+  Page 44: 36 lines, 2199 characters
+  Page 45: 36 lines, 2185 characters
+  Page 46: 36 lines, 2219 characters
+  Page 47: 36 lines, 2166 characters
+  Page 48: 33 lines, 1917 characters
+  Page 49: 34 lines, 1924 characters
+  Page 50: 36 lines, 2227 characters
+  Page 51: 36 lines, 2197 characters
+  Page 52: 34 lines, 2254 characters
+  Page 53: 36 lines, 2202 characters
+  Page 54: 36 lines, 2195 characters
+  Page 55: 36 lines, 2176 characters
+  Page 56: 36 lines, 2199 characters
+  Page 57: 36 lines, 2194 characters
+  Page 58: 36 lines, 2194 characters
+  Page 59: 36 lines, 2198 characters
+  Page 60: 36 lines, 2243 characters
+  Page 61: 36 lines, 2152 characters
+  Page 62: 36 lines, 2193 characters
+  Page 63: 36 lines, 2157 characters
+  Page 64: 32 lines, 1826 characters
+  Page 65: 36 lines, 2209 characters
+  Page 66: 36 lines, 2231 characters
+  Page 67: 36 lines, 2192 characters
+  Page 68: 36 lines, 2169 characters
+  Page 69: 36 lines, 2229 characters
+  Page 70: 36 lines, 2141 characters
+  Page 71: 36 lines, 2165 characters
+  Page 72: 36 lines, 2130 characters
+  Page 73: 36 lines, 2198 characters
+  Page 74: 36 lines, 2181 characters
+  Page 75: 36 lines, 2122 characters
+  Page 76: 36 lines, 2191 characters
+  Page 77: 33 lines, 1940 characters
+  Page 78: 36 lines, 2237 characters
+  Page 79: 36 lines, 2096 characters
+  Page 80: 34 lines, 2040 characters
+  Page 81: 36 lines, 2129 characters
+  Page 82: 36 lines, 2200 characters
+  Page 83: 36 lines, 2234 characters
+  Page 84: 36 lines, 2234 characters
+  Page 85: 36 lines, 2181 characters
+  Page 86: 33 lines, 1824 characters
+  Page 87: 21 lines, 1192 characters
+  Page 88: 5 lines, 59 characters
+  Page 89: 24 lines, 1378 characters
+  Page 90: 36 lines, 2186 characters
+  Page 91: 36 lines, 2152 characters
+  Page 92: 36 lines, 2195 characters
+  Page 93: 36 lines, 2168 characters
+  Page 94: 36 lines, 2148 characters
+  Page 95: 36 lines, 2206 characters
+  Page 96: 36 lines, 2125 characters
+  Page 97: 31 lines, 1626 characters
+  Page 98: 36 lines, 2275 characters
+  Page 99: 36 lines, 2196 characters
+  Page 100: 36 lines, 2211 characters
+  Page 101: 36 lines, 2147 characters
+  Page 102: 36 lines, 2140 characters
+  Page 103: 36 lines, 2190 characters
+  Page 104: 33 lines, 1785 characters
+  Page 105: 36 lines, 2202 characters
+  Page 106: 36 lines, 2146 characters
+  Page 107: 36 lines, 2145 characters
+  Page 108: 36 lines, 2149 characters
+  Page 109: 36 lines, 2100 characters
+  Page 110: 5 lines, 204 characters
+  Page 111: 10 lines, 88 characters
+  Page 112: 22 lines, 1275 characters
+  Page 113: 36 lines, 2211 characters
+  Page 114: 36 lines, 2175 characters
+  Page 115: 36 lines, 2167 characters
+  Page 116: 36 lines, 2212 characters
+  Page 117: 34 lines, 1975 characters
+  Page 118: 36 lines, 2203 characters
+  Page 119: 36 lines, 2294 characters
+  Page 120: 36 lines, 2194 characters
+  Page 121: 36 lines, 2142 characters
+  Page 122: 36 lines, 2252 characters
+  Page 123: 36 lines, 2153 characters
+  Page 124: 36 lines, 2140 characters
+  Page 125: 35 lines, 2122 characters
+  Page 126: 34 lines, 1814 characters
+  Page 127: 36 lines, 2195 characters
+  Page 128: 36 lines, 2165 characters
+  Page 129: 36 lines, 2234 characters
+  Page 130: 36 lines, 2256 characters
+  Page 131: 36 lines, 2163 characters
+  Page 132: 36 lines, 2202 characters
+  Page 133: 9 lines, 480 characters
+  Page 134: 11 lines, 63 characters
+  Page 135: 22 lines, 1303 characters
+  Page 136: 36 lines, 2192 characters
+  Page 137: 36 lines, 2165 characters
+  Page 138: 36 lines, 2187 characters
+  Page 139: 36 lines, 2205 characters
+  Page 140: 32 lines, 1741 characters
+  Page 141: 36 lines, 2285 characters
+  Page 142: 36 lines, 2201 characters
+  Page 143: 36 lines, 2141 characters
+  Page 144: 36 lines, 2208 characters
+  Page 145: 36 lines, 2167 characters
+  Page 146: 36 lines, 2146 characters
+  Page 147: 36 lines, 2242 characters
+  Page 148: 36 lines, 2240 characters
+  Page 149: 36 lines, 2173 characters
+  Page 150: 34 lines, 2053 characters
+  Page 151: 36 lines, 2210 characters
+  Page 152: 36 lines, 2230 characters
+  Page 153: 36 lines, 2181 characters
+  Page 154: 36 lines, 2200 characters
+  Page 155: 33 lines, 1827 characters
+  Page 156: 36 lines, 2225 characters
+  Page 157: 36 lines, 2214 characters
+  Page 158: 36 lines, 2242 characters
+  Page 159: 36 lines, 2171 characters
+  Page 160: 36 lines, 2201 characters
+  Page 161: 36 lines, 2180 characters
+  Page 162: 36 lines, 2214 characters
+  Page 163: 36 lines, 2222 characters
+  Page 164: 33 lines, 1839 characters
+  Page 165: 36 lines, 2170 characters
+  Page 166: 34 lines, 2007 characters
+  Page 167: 36 lines, 2239 characters
+  Page 168: 36 lines, 2273 characters
+  Page 169: 36 lines, 2170 characters
+  Page 170: 36 lines, 2220 characters
+  Page 171: 36 lines, 2212 characters
+  Page 172: 36 lines, 2255 characters
+  Page 173: 36 lines, 2194 characters
+  Page 174: 36 lines, 2271 characters
+  Page 175: 36 lines, 2210 characters
+  Page 176: 36 lines, 2267 characters
+  Page 177: 36 lines, 2235 characters
+  Page 178: 36 lines, 2293 characters
+  Page 179: 36 lines, 2244 characters
+  Page 180: 36 lines, 2177 characters
+  Page 181: 36 lines, 2231 characters
+  Page 182: 36 lines, 2189 characters
+  Page 183: 34 lines, 2022 characters
+  Page 184: 36 lines, 2214 characters
+  Page 185: 36 lines, 2096 characters
+  Page 186: 36 lines, 2135 characters
+  Page 187: 36 lines, 2286 characters
+  Page 188: 36 lines, 2240 characters
+  Page 189: 36 lines, 2234 characters
+  Page 190: 36 lines, 2190 characters
+  Page 191: 36 lines, 2178 characters
+  Page 192: 36 lines, 2226 characters
+  Page 193: 33 lines, 1838 characters
+  Page 194: 36 lines, 2200 characters
+  Page 195: 36 lines, 2221 characters
+  Page 196: 36 lines, 2213 characters
+  Page 197: 36 lines, 2242 characters
+  Page 198: 36 lines, 2216 characters
+  Page 199: 36 lines, 2187 characters
+  Page 200: 35 lines, 2201 characters
+  Page 201: 36 lines, 2133 characters
+  Page 202: 36 lines, 2250 characters
+  Page 203: 33 lines, 1763 characters
+  Page 204: 36 lines, 2284 characters
+  Page 205: 36 lines, 2144 characters
+  Page 206: 33 lines, 1940 characters
+  Page 207: 5 lines, 19 characters
+  Page 208: 22 lines, 1289 characters
+  Page 209: 36 lines, 2150 characters
+  Page 210: 36 lines, 2177 characters
+  Page 211: 36 lines, 2158 characters
+  Page 212: 36 lines, 2160 characters
+  Page 213: 34 lines, 1850 characters
+  Page 214: 36 lines, 2141 characters
+  Page 215: 36 lines, 2240 characters
+  Page 216: 36 lines, 2220 characters
+  Page 217: 36 lines, 2235 characters
+  Page 218: 36 lines, 2175 characters
+  Page 219: 36 lines, 2150 characters
+  Page 220: 36 lines, 2081 characters
+  Page 221: 36 lines, 2217 characters
+  Page 222: 36 lines, 2167 characters
+  Page 223: 36 lines, 2188 characters
+  Page 224: 33 lines, 1845 characters
+  Page 225: 36 lines, 2219 characters
+  Page 226: 36 lines, 2117 characters
+  Page 227: 36 lines, 2257 characters
+  Page 228: 36 lines, 2230 characters
+  Page 229: 36 lines, 2163 characters
+  Page 230: 36 lines, 2139 characters
+  Page 231: 36 lines, 2263 characters
+  Page 232: 36 lines, 2138 characters
+  Page 233: 36 lines, 2212 characters
+  Page 234: 21 lines, 1228 characters
+  Page 235: 4 lines, 28 characters
+  Page 236: 24 lines, 1370 characters
+  Page 237: 36 lines, 2133 characters
+  Page 238: 36 lines, 2221 characters
+  Page 239: 36 lines, 2188 characters
+  Page 240: 34 lines, 2033 characters
+  Page 241: 36 lines, 2178 characters
+  Page 242: 36 lines, 2226 characters
+  Page 243: 32 lines, 1697 characters
+  Page 244: 34 lines, 2052 characters
+  Page 245: 36 lines, 2238 characters
+  Page 246: 36 lines, 2219 characters
+  Page 247: 36 lines, 2206 characters
+  Page 248: 36 lines, 2225 characters
+  Page 249: 32 lines, 1768 characters
+  Page 250: 36 lines, 2187 characters
+  Page 251: 36 lines, 2249 characters
+  Page 252: 36 lines, 2167 characters
+  Page 253: 36 lines, 2241 characters
+  Page 254: 36 lines, 2163 characters
+  Page 255: 36 lines, 2195 characters
+  Page 256: 33 lines, 1745 characters
+  Page 257: 36 lines, 2193 characters
+  Page 258: 36 lines, 2213 characters
+  Page 259: 36 lines, 2224 characters
+  Page 260: 32 lines, 1826 characters
+  Page 261: 36 lines, 2237 characters
+  Page 262: 36 lines, 2186 characters
+  Page 263: 33 lines, 1910 characters
+  Page 264: 36 lines, 2170 characters
+  Page 265: 36 lines, 2192 characters
+  Page 266: 36 lines, 2173 characters
+  Page 267: 36 lines, 2156 characters
+  Page 268: 36 lines, 2176 characters
+  Page 269: 36 lines, 2206 characters
+  Page 270: 36 lines, 2171 characters
+  Page 271: 35 lines, 2168 characters
+  Page 272: 36 lines, 2253 characters
+  Page 273: 36 lines, 2170 characters
+  Page 274: 33 lines, 1777 characters
+  Page 275: 36 lines, 2228 characters
+  Page 276: 34 lines, 1966 characters
+  Page 277: 36 lines, 2225 characters
+  Page 278: 36 lines, 2142 characters
+  Page 279: 36 lines, 2203 characters
+  Page 280: 36 lines, 2215 characters
+  Page 281: 36 lines, 2219 characters
+  Page 282: 36 lines, 2176 characters
+  Page 283: 36 lines, 2265 characters
+  Page 284: 36 lines, 2188 characters
+  Page 285: 36 lines, 2135 characters
+  Page 286: 32 lines, 1823 characters
+  Page 287: 36 lines, 2193 characters
+  Page 288: 17 lines, 983 characters
+  Page 289: 12 lines, 62 characters
+  Page 290: 22 lines, 1257 characters
+  Page 291: 36 lines, 2199 characters
+  Page 292: 36 lines, 2205 characters
+  Page 293: 36 lines, 2184 characters
+  Page 294: 33 lines, 1807 characters
+  Page 295: 36 lines, 2134 characters
+  Page 296: 36 lines, 2223 characters
+  Page 297: 36 lines, 2236 characters
+  Page 298: 36 lines, 2212 characters
+  Page 299: 36 lines, 2179 characters
+  Page 300: 36 lines, 2168 characters
+  Page 301: 34 lines, 1904 characters
+  Page 302: 36 lines, 2189 characters
+  Page 303: 36 lines, 2194 characters
+  Page 304: 36 lines, 2223 characters
+  Page 305: 36 lines, 2150 characters
+  Page 306: 36 lines, 2185 characters
+  Page 307: 36 lines, 2107 characters
+  Page 308: 34 lines, 2098 characters
+  Page 309: 36 lines, 2173 characters
+  Page 310: 36 lines, 2167 characters
+  Page 311: 36 lines, 2190 characters
+  Page 312: 36 lines, 2183 characters
+  Page 313: 36 lines, 2257 characters
+  Page 314: 36 lines, 2236 characters
+  Page 315: 33 lines, 1764 characters
+  Page 316: 36 lines, 2119 characters
+  Page 317: 36 lines, 2175 characters
+  Page 318: 36 lines, 2209 characters
+  Page 319: 36 lines, 2254 characters
+  Page 320: 36 lines, 2254 characters
+  Page 321: 36 lines, 2210 characters
+  Page 322: 36 lines, 2215 characters
+  Page 323: 36 lines, 2196 characters
+  Page 324: 36 lines, 2210 characters
+  Page 325: 36 lines, 2181 characters
+  Page 326: 36 lines, 2155 characters
+  Page 327: 36 lines, 2124 characters
+  Page 328: 23 lines, 1365 characters
+  Page 329: 3 lines, 35 characters
+  Page 330: 22 lines, 1314 characters
+  Page 331: 36 lines, 2226 characters
+  Page 332: 36 lines, 2222 characters
+  Page 333: 36 lines, 2192 characters
+  Page 334: 36 lines, 2220 characters
+  Page 335: 36 lines, 2228 characters
+  Page 336: 36 lines, 2247 characters
+  Page 337: 36 lines, 2246 characters
+  Page 338: 33 lines, 1846 characters
+  Page 339: 36 lines, 2170 characters
+  Page 340: 36 lines, 2276 characters
+  Page 341: 36 lines, 2277 characters
+  Page 342: 36 lines, 2245 characters
+  Page 343: 36 lines, 2173 characters
+  Page 344: 36 lines, 2228 characters
+  Page 345: 36 lines, 2178 characters
+  Page 346: 36 lines, 2251 characters
+  Page 347: 36 lines, 2212 characters
+  Page 348: 36 lines, 2128 characters
+  Page 349: 36 lines, 2325 characters
+  Page 350: 36 lines, 2263 characters
+  Page 351: 31 lines, 1898 characters
+  Page 352: 4 lines, 29 characters
+  Page 353: 22 lines, 1295 characters
+  Page 354: 36 lines, 2214 characters
+  Page 355: 36 lines, 2216 characters
+  Page 356: 36 lines, 2274 characters
+  Page 357: 36 lines, 2183 characters
+  Page 358: 36 lines, 2210 characters
+  Page 359: 33 lines, 1792 characters
+  Page 360: 36 lines, 2172 characters
+  Page 361: 36 lines, 2163 characters
+  Page 362: 36 lines, 2295 characters
+  Page 363: 36 lines, 2175 characters
+  Page 364: 36 lines, 2230 characters
+  Page 365: 36 lines, 2212 characters
+  Page 366: 36 lines, 2177 characters
+  Page 367: 36 lines, 2209 characters
+  Page 368: 36 lines, 2220 characters
+  Page 369: 36 lines, 2139 characters
+  Page 370: 36 lines, 2195 characters
+  Page 371: 36 lines, 2207 characters
+  Page 372: 36 lines, 2272 characters
+  Page 373: 36 lines, 2106 characters
+  Page 374: 36 lines, 2288 characters
+  Page 375: 36 lines, 2253 characters
+  Page 376: 36 lines, 2265 characters
+  Page 377: 32 lines, 1693 characters
+  Page 378: 36 lines, 2170 characters
+  Page 379: 36 lines, 2208 characters
+  Page 380: 36 lines, 2289 characters
+  Page 381: 36 lines, 2239 characters
+  Page 382: 36 lines, 2201 characters
+  Page 383: 36 lines, 2246 characters
+  Page 384: 36 lines, 2240 characters
+  Page 385: 36 lines, 2196 characters
+  Page 386: 34 lines, 2021 characters
+  Page 387: 10 lines, 524 characters
+  Page 388: 33 lines, 2044 characters
+  Page 389: 36 lines, 2318 characters
+  Page 390: 36 lines, 2297 characters
+  Page 391: 34 lines, 1865 characters
+
+Total Lines: 13332
+Total Characters: 802717
+Average chars/page: 2052
+
+============================================================
+SAMPLE TEXT (First 1000 characters)
+============================================================
+--- Page 1 ---
+Introducción
+/
+
+--- Page 2 ---
+E
+ste libro está hecho para entender varias cosas. Un título
+alternativo podría ser"el principio de la película" porque
+nos interesa contarles el origen de muchos de los sucesos
+de hoy desde la perspectiva amplia que la historia nos puede dar.
+Surge de la necesidad de darles un contexto a las noticias que
+inundan nuestras vidas con un sentido de amenaza y catástrofe
+que es dificil de sacudir, pero veremos que no hay necesidad de ser
+tan alarmistas, aunque sí críticos. Si partimos de un noticiero para
+entender el mundo en el que vivimos seguramente tendremos la
+sensación de que estamos en la peor de las eras, que el mundo va a
+colapsar y que no hay nada para remediarlo. Del espanto podemos
+pasar rápidamente al pesimismo, al cinismo, o peor, a la ira. Pero
+no hay necesidad de dejarnos llevar por la zozobra porque muchos
+de los fenómenos de hoy tienen unos orígenes específicos y al
+entenderlos podemos interpretar nuestra era. Vamos a recorrer 
+...
+
+============================================================
+EXTRACTION COMPLETE
+============================================================
+✓ Raw JSON saved to: /tmp/textract_lore_results.json
+✓ Extracted text saved to: /tmp/textract_lore_text.txt
+✓ Total pages: 391
+✓ Total characters: 810037
+Completed: 2025-11-23T18:09:57.062984

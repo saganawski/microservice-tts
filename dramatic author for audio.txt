@@ -29,3 +29,31 @@ This was just the beginning.
 
 api key
 AIzaSyBP7TINLGJ4UyhJYM6fVKKM-ctLrck5V6s
+
+
+  The upload should trigger the processing pipeline automatically:
+  1. S3 event → triggers OrchestratorLambda
+  2. OrchestratorLambda → analyzes PDF structure and detects chapters
+  3. Chapters queued → sent to ChapterQueue (FIFO)
+  4. Text extraction → ChapterTextExtractorLambda processes chapters
+  5. TTS generation → Chunks processed in parallel
+  6. Audio stitching → Final audio files created
+  
+  
+  
+  the OrchestratorLambda takes a long time to extract text
+  	1) is an individual  lambda triggered for each chapter?
+  	2) how does the Chapters queued work?
+
+gemini files api limit
+File Type 	Max Files Per Prompt	Max File Size (per file, via API import)	Max Length/Pages
+Documents (PDF, TXT)	3,000 (Gemini 2.5 Pro/Flash)	50 MB	1,000 pages
+Images	3,000 (Gemini 2.5 Pro/Flash)	7 MB (inline) / 50 MB (via API import)	Not applicable
+Video	10 files	2 GB (via Files API)	~45 min (with audio) / ~1 hr (video only)
+Audio	1 file (total combined length)	2 GB (via Files API)	~8.4 hours
+
+447-454
+
+I had to delete pages and compress. I wonder if everything after the maps will be way off now
+for this book I think its best to break it down into multiple chunks an manually do it
+

@@ -15,7 +15,8 @@ import java.util.List;
 import java.util.Map;
 
 public class ApiStack extends Stack {
-    public ApiStack(final Construct scope, final String id, final StackProps props, final Function validationLambda) {
+    public ApiStack(final Construct scope, final String id, final StackProps props,
+                    final Function validationLambda, final Function presignedUrlLambda) {
         super(scope, id, props);
 
         // create IAM role for API Gateway to write logs to CloudWatch
@@ -85,6 +86,59 @@ public class ApiStack extends Stack {
         
         // Explicitly grant API Gateway permission to invoke the Lambda
         validationLambda.grantInvoke(new ServicePrincipal("apigateway.amazonaws.com"));
+
+        // Add presigned URL endpoint for large file uploads
+        final Resource presignedUrl = api.getRoot().addResource("generate-upload-url");
+
+        // Create Lambda integration for presigned URL generation
+        final LambdaIntegration presignedUrlIntegration = LambdaIntegration.Builder.create(presignedUrlLambda)
+                .allowTestInvoke(true)
+                .build();
+
+        presignedUrl.addMethod(
+                "POST",
+                presignedUrlIntegration,
+                MethodOptions.builder()
+                        .requestParameters(Map.of(
+                                "method.request.header.Content-Type", true
+                        ))
+                        .build()
+        );
+
+        // Grant permission to API Gateway to invoke the presigned URL Lambda
+        presignedUrlLambda.grantInvoke(new ServicePrincipal("apigateway.amazonaws.com"));
+
+        // Add CORS support
+        presignedUrl.addMethod("OPTIONS",
+                MockIntegration.Builder.create()
+                        .integrationResponses(List.of(
+                                IntegrationResponse.builder()
+                                        .statusCode("200")
+                                        .responseParameters(Map.of(
+                                                "method.response.header.Access-Control-Allow-Headers", "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'",
+                                                "method.response.header.Access-Control-Allow-Origin", "'*'",
+                                                "method.response.header.Access-Control-Allow-Methods", "'OPTIONS,POST'"
+                                        ))
+                                        .build()
+                        ))
+                        .passthroughBehavior(PassthroughBehavior.WHEN_NO_MATCH)
+                        .requestTemplates(Map.of(
+                                "application/json", "{\"statusCode\": 200}"
+                        ))
+                        .build(),
+                MethodOptions.builder()
+                        .methodResponses(List.of(
+                                MethodResponse.builder()
+                                        .statusCode("200")
+                                        .responseParameters(Map.of(
+                                                "method.response.header.Access-Control-Allow-Headers", true,
+                                                "method.response.header.Access-Control-Allow-Origin", true,
+                                                "method.response.header.Access-Control-Allow-Methods", true
+                                        ))
+                                        .build()
+                        ))
+                        .build()
+        );
 
     }
 
