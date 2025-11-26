@@ -57,3 +57,13 @@ Audio	1 file (total combined length)	2 GB (via Files API)	~8.4 hours
 I had to delete pages and compress. I wonder if everything after the maps will be way off now
 for this book I think its best to break it down into multiple chunks an manually do it
 
+we need a way to sequentially stitch audio files together. come up with a plan to do this. favor the simpler, less changes need version to achieve this. 
+use this chapter in s3 as your test case "Amazon S3 /Buckets /audio-chunks-bucket272765753210 /lore-book-trimmed-20251122-100358/chapter_02/". use aws cli
+to trigger the audio-stitching-lambda directly
+
+I am being rate limited to 10,000 tokens per minute when using gemini-2.5-pro-tts api. come up with a plan that ensures we wont go over this limit. Favor the simpler, less changes needed version to achieve this. 
+
+
+test the flow starting with the original s3 bucket. Use AWS CLI to upload this book found at "/home/ken/Downloads/books/lore-book-trimmed-2-compressed.pdf" add a timestamp to the file name. Monitor all the aspects of the file flow and take note of any errors and or improvements.
+
+

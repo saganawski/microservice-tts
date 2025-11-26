@@ -31,11 +31,14 @@ The system uses a **chunked processing architecture** to handle large documents 
    - Stores text chunks in S3
    - Sends each chunk to TTS queue for parallel processing
 
-3. **TTSGenerationLambda** (New)
+3. **TTSGenerationLambda** (Updated with Audio Validation)
    - Processes individual text chunks from SQS queue
    - **Rate Limited**: Implements token-based delay to stay under 10k tokens/minute
    - **Concurrency**: Limited to 2 concurrent executions (was 20)
    - Implements exponential backoff retry logic for API rate limits
+   - **Audio Validation**: Validates duration, file size, format, and silence ratio
+   - **Intelligent Retry**: Type-specific retry strategies for validation failures
+   - **SNS Alerting**: Sends alerts when validation fails after all retries
    - Generates audio using Gemini TTS API
    - Stores audio chunks in S3
    - Sends completion notifications to stitching queue
@@ -58,6 +61,9 @@ The system uses a **chunked processing architecture** to handle large documents 
 
 #### DynamoDB
 - **AudioChunkTracking**: Tracks chunk processing completion status
+
+#### SNS Topics
+- **ValidationAlertTopic**: Sends email alerts when audio validation fails after all retries
 
 #### ApiStack
 - **REST API**: Provides `/file-upload` POST endpoint via API Gateway
@@ -95,6 +101,23 @@ The system uses a **chunked processing architecture** to handle large documents 
 
 ## Development Commands
 
+### Required: Set Environment Variables Before Deployment
+
+**CRITICAL:** The CDK reads environment variables during deployment. Set these BEFORE running `cdk deploy`:
+
+```bash
+# Required: Gemini API Key
+export GEMINI_API_KEY="AIzaSyCsCODpn4VCbeLWjaOOZ0tAxDR0noRTaZw"
+
+# Verify it's set
+echo $GEMINI_API_KEY
+```
+
+**Alternative:** Copy `.env.example` to `.env`, fill in values, and run:
+```bash
+source .env
+```
+
 ### Build and Package
 ```bash
 # Build all Python lambdas with dependencies (REQUIRED before CDK deploy)
@@ -114,13 +137,16 @@ cd lambdas/tts-generation-lambda && ./package.sh
 
 ### CDK Operations
 ```bash
+# IMPORTANT: Set environment variables first!
+export GEMINI_API_KEY="your-key-here"
+
 # List all stacks
 cdk ls
 
 # Synthesize CloudFormation templates
 cdk synth
 
-# Deploy stacks
+# Deploy stacks (after building lambdas)
 cdk deploy --all
 
 # Deploy individual stack
@@ -132,6 +158,21 @@ cdk diff
 
 # Destroy stacks
 cdk destroy --all
+```
+
+### Complete Deployment from Scratch
+```bash
+# 1. Set environment variables
+export GEMINI_API_KEY="your-key-here"
+
+# 2. Build all lambdas
+./build-python-lambdas.sh
+mvn clean package -DskipTests
+
+# 3. Deploy all stacks
+cdk deploy --all
+
+# 4. Verify deployment (see DEPLOYMENT_CHECKLIST.md)
 ```
 
 ### Testing
@@ -170,6 +211,7 @@ python lambdas/tts-generation-lambda/handler.py
 - `MAX_RETRY_ATTEMPTS`: Retry attempts for API rate limits (default: 5)
 - `INITIAL_WAIT`: Initial retry wait in seconds (default: 10)
 - `MAX_WAIT`: Maximum retry wait in seconds (default: 120)
+- `VALIDATION_ALERT_TOPIC_ARN`: SNS topic ARN for validation failure alerts
 
 #### AudioStitchingLambda
 - `AUDIO_CHUNKS_BUCKET`: S3 bucket for reading audio chunks
@@ -239,6 +281,48 @@ def generate_speech_with_retry(...):
     # TTS generation with automatic retry
 ```
 
+### Audio Validation (TTSGenerationLambda)
+
+The TTS lambda includes comprehensive audio validation to catch problematic outputs from the Gemini TTS API:
+
+**Validation Checks**:
+1. **Format Validation**: Verifies WAV format (24kHz, mono, 16-bit PCM)
+2. **Duration Validation**: Compares actual duration vs expected (based on word count at ~250 wpm)
+3. **Size Validation**: Checks file size against calibrated expected size (~31MB per chunk)
+4. **Silence Detection**: Uses RMS energy analysis to detect silent audio (>25% silence = retry)
+
+**Calibrated Metrics** (from production data):
+| Metric | Value |
+|--------|-------|
+| Expected file size | 31,446,330 bytes (~30.0 MB) |
+| Expected duration | ~655 seconds (~10.9 minutes) |
+| Speech rate | ~250 words/minute |
+| Size tolerance | ±10% |
+| Duration tolerance | ±20% (±50% for last chunk) |
+
+**Intelligent Retry Strategy**:
+| Failure Type | Max Retries | Delay Multiplier |
+|--------------|-------------|------------------|
+| Format error | 2 | 1.0x |
+| Duration error | 3 | 1.5x |
+| Size error | 3 | 1.5x |
+| Silence error | 2 | 2.0x |
+
+**Observability**:
+```json
+{
+  "event": "AUDIO_VALIDATION_METRICS",
+  "passed": true,
+  "attempt": 1,
+  "duration_ratio": 0.98,
+  "silence_ratio": 0.05,
+  "size_ratio": 1.02,
+  "avg_rms_energy": 1523.4
+}
+```
+
+**Alerting**: Failed validations after all retries trigger SNS notifications to the configured email.
+
 ### Audio Processing
 - **Format**: WAV, 24kHz, 16-bit, mono
 - **Crossfading**: Linear interpolation over 50ms
@@ -299,6 +383,25 @@ def generate_speech_with_retry(...):
 - **Symptom**: Final audio missing sections
 - **Solution**: DynamoDB tracking ensures all chunks processed
 
+#### Audio Validation Failures
+- **Symptom**: SNS alerts for validation failures, chunks in DLQ
+- **Root Causes**:
+  - **Undersized files**: Gemini API returned truncated audio (~18-25MB vs ~30MB)
+  - **Silent audio**: Correct size/duration but no speech content
+  - **Duration mismatch**: Audio length doesn't match expected from text length
+- **Solution Implemented**:
+  - Comprehensive validation (format, duration, size, silence)
+  - Intelligent retry with type-specific strategies (2-3 retries per failure type)
+  - SNS alerting for persistent failures
+- **Monitoring**:
+  ```bash
+  # Check validation metrics in CloudWatch Logs Insights
+  fields @timestamp, @message
+  | filter @message like /AUDIO_VALIDATION_METRICS/
+  | parse @message '"passed": *,' as validation_passed
+  | stats count(*) by validation_passed
+  ```
+
 ### Monitoring
 ```bash
 # Check TTS queue depth
@@ -327,6 +430,8 @@ aws dynamodb scan --table-name AudioChunkTracking
 
 ## Future Enhancements
 
+- [x] Audio validation and intelligent retry system (implemented)
+- [x] SNS alerting for validation failures (implemented)
 - [ ] Dynamic chunk size based on content complexity
 - [ ] Multi-language TTS support
 - [ ] Real-time processing status via WebSocket

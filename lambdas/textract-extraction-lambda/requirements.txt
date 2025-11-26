@@ -1,0 +1,2 @@
+# AWS SDK is already included in Lambda Python runtime
+# No additional dependencies required

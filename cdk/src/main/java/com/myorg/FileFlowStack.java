@@ -15,6 +15,7 @@ import software.amazon.awscdk.services.s3.EventType;
 import software.amazon.awscdk.services.s3.NotificationKeyFilter;
 import software.amazon.awscdk.services.s3.notifications.LambdaDestination;
 import software.amazon.awscdk.services.sns.Topic;
+import software.amazon.awscdk.services.sns.subscriptions.EmailSubscription;
 import software.amazon.awscdk.services.sns.subscriptions.LambdaSubscription;
 import software.amazon.awscdk.services.sqs.DeadLetterQueue;
 import software.amazon.awscdk.services.sqs.DeduplicationScope;
@@ -314,20 +315,17 @@ public class FileFlowStack extends Stack {
         // chaptersBucket.addEventNotification(EventType.OBJECT_CREATED, new LambdaDestination(geminiTtsLambda));
 
         // ============================================================
-        // GEMINI FLOW - Full Gemini Vision + TTS Pipeline
-        // Uses Gemini for PDF analysis, text extraction, and TTS
+        // TEXTRACT FLOW - AWS Textract for text extraction
+        // Whole-book processing without chapter detection
         // ============================================================
 
-        // Create bucket for Gemini flow uploads (separate from original bucket)
-        final Bucket geminiUploadBucket = Bucket.Builder.create(this, "GeminiUploadBucket")
-                .bucketName("gemini-upload-bucket" + accountNumber)
+        // Create bucket for Textract results (raw JSON + extracted text)
+        final Bucket textractResultsBucket = Bucket.Builder.create(this, "TextractResultsBucket")
+                .bucketName("textract-results-bucket" + accountNumber)
                 .versioned(false)
-                .build();
-
-        // Create text bucket for extracted text storage (optional, for debugging/caching)
-        final Bucket geminiTextBucket = Bucket.Builder.create(this, "GeminiTextBucket")
-                .bucketName("gemini-text-bucket" + accountNumber)
-                .versioned(false)
+                .lifecycleRules(List.of(software.amazon.awscdk.services.s3.LifecycleRule.builder()
+                        .expiration(Duration.days(30))  // Clean up raw JSON after 30 days
+                        .build()))
                 .build();
 
         // ============================================================
@@ -354,16 +352,28 @@ public class FileFlowStack extends Stack {
                         .build()))
                 .build();
 
-        // Create DynamoDB table for tracking chunk completion
+        // Create DynamoDB table for tracking chunk completion (job-based, not chapter-based)
         final Table chunkTrackingTable = Table.Builder.create(this, "AudioChunkTracking")
-                .tableName("AudioChunkTracking")
+                .tableName("JobAudioChunkTracking")
                 .partitionKey(Attribute.builder()
-                        .name("chapter_key")
+                        .name("job_id")  // Changed from chapter_key to job_id for whole-book processing
                         .type(AttributeType.STRING)
                         .build())
                 .billingMode(BillingMode.PAY_PER_REQUEST)
                 .timeToLiveAttribute("ttl")
                 .build();
+
+        // SNS Topic for TTS validation failure alerts
+        // Sends notifications when audio chunks fail validation after all retries
+        final Topic validationAlertTopic = Topic.Builder.create(this, "ValidationAlertTopic")
+                .topicName("tts-validation-alerts")
+                .build();
+
+        // Add email subscription for validation alerts (configure your email)
+        // TODO: Update with your actual email address or remove if using different notification method
+        validationAlertTopic.addSubscription(
+                new EmailSubscription("ken@example.com")
+        );
 
         // SQS FIFO Queue for TTS processing
         final Queue ttsQueue = Queue.Builder.create(this, "TTSProcessingQueue")
@@ -391,78 +401,72 @@ public class FileFlowStack extends Stack {
                 .visibilityTimeout(Duration.minutes(11))  // 10 min processing + buffer
                 .build();
 
-        // Dead Letter Queue for failed chapter processing
-        final Queue chapterDLQ = Queue.Builder.create(this, "ChapterDLQ")
-                .queueName("chapter-processing-dlq.fifo")
+        // Dead Letter Queue for failed chunking operations
+        final Queue chunkingDLQ = Queue.Builder.create(this, "ChunkingDLQ")
+                .queueName("chunking-dlq.fifo")
                 .fifo(true)
                 .contentBasedDeduplication(true)
                 .retentionPeriod(Duration.days(14))
                 .build();
 
-        // SQS FIFO Queue for chapter processing messages with retry and DLQ
-        final Queue chapterQueue = Queue.Builder.create(this, "ChapterQueue")
-                .queueName("chapter-processing-queue.fifo")
+        // SQS FIFO Queue for text chunking operations
+        final Queue chunkingQueue = Queue.Builder.create(this, "ChunkingQueue")
+                .queueName("chunking-queue.fifo")
                 .fifo(true)
                 .contentBasedDeduplication(true)
-                .deduplicationScope(DeduplicationScope.MESSAGE_GROUP)
-                .fifoThroughputLimit(FifoThroughputLimit.PER_MESSAGE_GROUP_ID)
-                .visibilityTimeout(Duration.minutes(15))  // 10 min for text extraction + 5 min buffer
+                .visibilityTimeout(Duration.minutes(5))  // Chunking should be fast
                 .retentionPeriod(Duration.days(14))
                 .deadLetterQueue(DeadLetterQueue.builder()
-                        .queue(chapterDLQ)
-                        .maxReceiveCount(3)  // Retry failed chapters 3 times before moving to DLQ
+                        .queue(chunkingDLQ)
+                        .maxReceiveCount(3)
                         .build())
                 .build();
 
-        // Orchestrator Lambda - Analyzes PDF structure and queues chapters
-        final Function orchestratorLambda = Function.Builder.create(this, "OrchestratorLambda")
+        // Textract Extraction Lambda - Extracts all text from PDF using AWS Textract
+        final Function textractExtractionLambda = Function.Builder.create(this, "TextractExtractionLambda")
                 .runtime(Runtime.PYTHON_3_12)
-                .code(Code.fromAsset("lambdas/orchestrator-lambda"))
+                .code(Code.fromAsset("lambdas/textract-extraction-lambda"))
                 .handler("handler.lambda_handler")
                 .environment(Map.of(
-                        "GEMINI_API_KEY", System.getenv("GEMINI_API_KEY") != null ? System.getenv("GEMINI_API_KEY") : "",
-                        "CHAPTER_QUEUE_URL", chapterQueue.getQueueUrl(),
-                        "TEXT_BUCKET", geminiTextBucket.getBucketName()))
-                .timeout(Duration.minutes(15))  // PDF upload and analysis can take time
+                        "TEXTRACT_RESULTS_BUCKET", textractResultsBucket.getBucketName(),
+                        "CHUNKING_QUEUE_URL", chunkingQueue.getQueueUrl()))
+                .timeout(Duration.minutes(15))  // Textract can take several minutes for large PDFs
+                .memorySize(2048)
+                .build();
+
+        // Grant permissions for Textract Extraction Lambda
+        originalFileBucket.grantRead(textractExtractionLambda);
+        textractResultsBucket.grantPut(textractExtractionLambda);
+        chunkingQueue.grantSendMessages(textractExtractionLambda);
+        textractExtractionLambda.addToRolePolicy(PolicyStatement.Builder.create()
+                .actions(List.of(
+                        "textract:StartDocumentTextDetection",
+                        "textract:GetDocumentTextDetection"))
+                .resources(List.of("*"))
+                .build());
+
+        // Text Chunking Lambda - Splits full text into 4500-token chunks
+        final Function textChunkingLambda = Function.Builder.create(this, "TextChunkingLambda")
+                .runtime(Runtime.PYTHON_3_12)
+                .code(Code.fromAsset("lambdas/text-chunking-lambda"))
+                .handler("handler.lambda_handler")
+                .environment(Map.of(
+                        "TEXTRACT_RESULTS_BUCKET", textractResultsBucket.getBucketName(),
+                        "TEXT_CHUNKS_BUCKET", textChunksBucket.getBucketName(),
+                        "TTS_QUEUE_URL", ttsQueue.getQueueUrl(),
+                        "MAX_TOKENS_PER_CHUNK", "4500"))
+                .timeout(Duration.minutes(2))  // Chunking should be fast - just text splitting
                 .memorySize(1024)
                 .build();
 
-        // Grant permissions for Orchestrator Lambda
-        originalFileBucket.grantRead(orchestratorLambda);  // Read from original bucket where files are validated
-        geminiUploadBucket.grantRead(orchestratorLambda);  // Keep for backward compatibility
-        geminiTextBucket.grantPut(orchestratorLambda);  // For metadata storage
-        chapterQueue.grantSendMessages(orchestratorLambda);
+        // Grant permissions for Text Chunking Lambda
+        textractResultsBucket.grantRead(textChunkingLambda);
+        textChunksBucket.grantPut(textChunkingLambda);
+        ttsQueue.grantSendMessages(textChunkingLambda);
 
-        // Chapter Text Extractor Lambda - Only extracts text and chunks (no TTS)
-        // CRITICAL: Limited to 2 concurrent executions to prevent API quota exhaustion
-        // Gemini API limit: 1M tokens/minute for gemini-3-pro
-        // Each chapter: ~200k tokens
-        // 2 concurrent × 200k = 400k tokens/minute (safely under 1M limit)
-        final Function chapterTextExtractorLambda = Function.Builder.create(this, "ChapterTextExtractorLambda")
-                .runtime(Runtime.PYTHON_3_12)
-                .code(Code.fromAsset("lambdas/chapter-text-extractor-lambda"))
-                .handler("handler.lambda_handler")  // Use main handler with retry logic
-                .environment(Map.of(
-                        "GEMINI_API_KEY", System.getenv("GEMINI_API_KEY") != null ? System.getenv("GEMINI_API_KEY") : "",
-                        "TEXT_CHUNKS_BUCKET", textChunksBucket.getBucketName(),  // Use dedicated text chunks bucket
-                        "TTS_QUEUE_URL", ttsQueue.getQueueUrl(),
-                        "GEMINI_TEXT_MODEL", "gemini-3-pro-preview",
-                        "MAX_TOKENS_PER_CHUNK", "4500"))  // Reduced chunk size
-                .timeout(Duration.minutes(10))  // Text extraction and chunking only
-                .memorySize(1024)  // Less memory needed without audio processing
-                .reservedConcurrentExecutions(2)  // CRITICAL: Limit to 2 to prevent API quota exhaustion
-                .build();
-
-        // Grant permissions for Chapter Text Extractor Lambda
-        geminiTextBucket.grantReadWrite(chapterTextExtractorLambda);
-        textChunksBucket.grantReadWrite(chapterTextExtractorLambda);  // For storing text chunks
-        ttsQueue.grantSendMessages(chapterTextExtractorLambda);
-
-        // Add SQS trigger to Chapter Text Extractor Lambda with batch failure reporting
-        // This enables automatic retry of failed messages via batchItemFailures response
-        chapterTextExtractorLambda.addEventSource(SqsEventSource.Builder.create(chapterQueue)
-                .batchSize(1)  // Process one chapter at a time for better error handling
-                .reportBatchItemFailures(true)  // Enable partial batch failure responses for retry
+        // Add SQS trigger to Text Chunking Lambda
+        textChunkingLambda.addEventSource(SqsEventSource.Builder.create(chunkingQueue)
+                .batchSize(1)
                 .build());
 
         // TTS Generation Lambda - Processes individual text chunks
@@ -472,26 +476,27 @@ public class FileFlowStack extends Stack {
                 .runtime(Runtime.PYTHON_3_12)
                 .code(Code.fromAsset("lambdas/tts-generation-lambda"))
                 .handler("handler.lambda_handler")
-                .environment(Map.of(
-                        "GEMINI_API_KEY", System.getenv("GEMINI_API_KEY") != null ? System.getenv("GEMINI_API_KEY") : "",
-                        "AUDIO_CHUNKS_BUCKET", audioChunksBucket.getBucketName(),
-                        "TEXT_CHUNKS_BUCKET", textChunksBucket.getBucketName(),  // Use dedicated text chunks bucket
-                        "STITCH_QUEUE_URL", stitchQueue.getQueueUrl(),
-                        "GEMINI_TTS_MODEL", "gemini-2.5-pro-preview-tts",
-                        "GEMINI_TTS_VOICE", "Charon",
-                        "MAX_RETRY_ATTEMPTS", "5",
-                        "INITIAL_WAIT", "10",
-                        "MAX_WAIT", "120"))
+                .environment(Map.ofEntries(
+                        Map.entry("GEMINI_API_KEY", System.getenv("GEMINI_API_KEY") != null ? System.getenv("GEMINI_API_KEY") : ""),
+                        Map.entry("AUDIO_CHUNKS_BUCKET", audioChunksBucket.getBucketName()),
+                        Map.entry("TEXT_CHUNKS_BUCKET", textChunksBucket.getBucketName()),
+                        Map.entry("STITCH_QUEUE_URL", stitchQueue.getQueueUrl()),
+                        Map.entry("GEMINI_TTS_MODEL", "gemini-2.5-pro-preview-tts"),
+                        Map.entry("GEMINI_TTS_VOICE", "Charon"),
+                        Map.entry("MAX_RETRY_ATTEMPTS", "5"),
+                        Map.entry("INITIAL_WAIT", "10"),
+                        Map.entry("MAX_WAIT", "120"),
+                        Map.entry("VALIDATION_ALERT_TOPIC_ARN", validationAlertTopic.getTopicArn())))
                 .timeout(Duration.minutes(15))  // Max timeout for large chunks
                 .memorySize(2048)  // Higher memory for better performance
                 .reservedConcurrentExecutions(2)  // Reduced from 20 to stay under 10k tokens/min rate limit
                 .build();
 
         // Grant permissions for TTS Generation Lambda
-        geminiTextBucket.grantRead(ttsGenerationLambda);
         textChunksBucket.grantRead(ttsGenerationLambda);  // For reading text chunks
         audioChunksBucket.grantPut(ttsGenerationLambda);
         stitchQueue.grantSendMessages(ttsGenerationLambda);
+        validationAlertTopic.grantPublish(ttsGenerationLambda);  // For sending validation failure alerts
 
         // Add SQS trigger to TTS Generation Lambda
         ttsGenerationLambda.addEventSource(SqsEventSource.Builder.create(ttsQueue)
@@ -527,10 +532,10 @@ public class FileFlowStack extends Stack {
                 .batchSize(1)
                 .build());
 
-        // S3 Event Notification: Trigger Orchestrator when PDF uploaded to original bucket (after validation)
+        // S3 Event Notification: Trigger Textract Extraction when PDF uploaded to original bucket (after validation)
         originalFileBucket.addEventNotification(
                 EventType.OBJECT_CREATED,
-                new LambdaDestination(orchestratorLambda),
+                new LambdaDestination(textractExtractionLambda),
                 NotificationKeyFilter.builder()
                         .suffix(".pdf")
                         .build()

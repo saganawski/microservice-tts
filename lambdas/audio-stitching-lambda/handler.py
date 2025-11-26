@@ -40,23 +40,21 @@ def get_tracking_table():
     return dynamodb.Table(TRACKING_TABLE)
 
 
-def update_chunk_status(job_id: str, chapter_num: int, chunk_index: int, total_chunks: int = None) -> bool:
+def update_chunk_status(job_id: str, chunk_index: int, total_chunks: int = None) -> bool:
     """
     Update chunk status in DynamoDB and check if all chunks are complete
 
+    Changed from chapter-based to job-based tracking for whole-book processing
+
     Args:
         job_id: Job identifier
-        chapter_num: Chapter number
         chunk_index: Index of completed chunk
         total_chunks: Total number of chunks expected (optional, will be set on first chunk)
 
     Returns:
-        True if all chunks for this chapter are complete
+        True if all chunks for this job are complete
     """
     table = get_tracking_table()
-
-    # Create composite key for the chapter
-    chapter_key = f"{job_id}#chapter_{chapter_num:02d}"
 
     try:
         # Build update expression
@@ -71,9 +69,9 @@ def update_chunk_status(job_id: str, chapter_num: int, chunk_index: int, total_c
             update_expr += ', total_chunks = if_not_exists(total_chunks, :total)'
             expr_values[':total'] = total_chunks
 
-        # Update chunk status
+        # Update chunk status (using job_id as primary key)
         response = table.update_item(
-            Key={'chapter_key': chapter_key},
+            Key={'job_id': job_id},
             UpdateExpression=update_expr,
             ExpressionAttributeValues=expr_values,
             ReturnValues='ALL_NEW'
@@ -85,10 +83,10 @@ def update_chunk_status(job_id: str, chapter_num: int, chunk_index: int, total_c
         stored_total = item.get('total_chunks')
 
         if stored_total and len(completed_chunks) >= stored_total:
-            logger.info(f"All {stored_total} chunks completed for Chapter {chapter_num}")
+            logger.info(f"All {stored_total} chunks completed for job {job_id}")
             return True
 
-        logger.info(f"Chapter {chapter_num}: {len(completed_chunks)}/{stored_total} chunks completed")
+        logger.info(f"Job {job_id}: {len(completed_chunks)}/{stored_total} chunks completed")
         return False
 
     except Exception as e:
@@ -116,10 +114,9 @@ def download_audio_chunk(bucket: str, key: str) -> bytes:
     return audio_data
 
 
-def download_chunks_parallel(job_id: str, chapter_num: int,
-                            total_chunks: int) -> List[bytes]:
+def download_chunks_parallel(job_id: str, total_chunks: int) -> List[bytes]:
     """
-    Download all audio chunks for a chapter in parallel
+    Download all audio chunks for a job in parallel
 
     Returns:
         List of WAV audio data in order
@@ -130,7 +127,7 @@ def download_chunks_parallel(job_id: str, chapter_num: int,
         futures = {}
 
         for i in range(total_chunks):
-            chunk_key = f"{job_id}/chapter_{chapter_num:02d}/audio_chunk_{i:03d}.wav"
+            chunk_key = f"{job_id}/chunk_{i:04d}.wav"
             future = executor.submit(download_audio_chunk, AUDIO_CHUNKS_BUCKET, chunk_key)
             futures[future] = i
 
@@ -146,15 +143,14 @@ def download_chunks_parallel(job_id: str, chapter_num: int,
     return chunks
 
 
-def create_stitched_audio_streaming(job_id: str, chapter_num: int,
-                                   total_chunks: int) -> str:
+def create_stitched_audio_streaming(job_id: str, chunk_indices: List[int]) -> str:
     """
     Stream-process audio chunks to reduce memory usage
+    Changed to whole-book processing with duration-based segments
 
     Args:
         job_id: Job identifier
-        chapter_num: Chapter number
-        total_chunks: Total number of chunks to process
+        chunk_indices: List of chunk indices to stitch together
 
     Returns:
         Path to temporary file containing stitched audio
@@ -167,6 +163,7 @@ def create_stitched_audio_streaming(job_id: str, chapter_num: int,
     temp_path = temp_file.name
     temp_file.close()
 
+    total_chunks = len(chunk_indices)
     logger.info(f"Starting streaming audio stitching for {total_chunks} chunks to {temp_path}")
 
     # Calculate crossfade samples
@@ -181,10 +178,10 @@ def create_stitched_audio_streaming(job_id: str, chapter_num: int,
         output_wav.setsampwidth(SAMPLE_WIDTH)
         output_wav.setframerate(SAMPLE_RATE)
 
-        for chunk_index in range(total_chunks):
+        for idx, chunk_index in enumerate(chunk_indices):
             # Download single chunk
-            chunk_key = f"{job_id}/chapter_{chapter_num:02d}/audio_chunk_{chunk_index:03d}.wav"
-            logger.info(f"Processing chunk {chunk_index+1}/{total_chunks}: {chunk_key}")
+            chunk_key = f"{job_id}/chunk_{chunk_index:04d}.wav"
+            logger.info(f"Processing chunk {idx+1}/{total_chunks}: {chunk_key}")
 
             chunk_data = download_audio_chunk(AUDIO_CHUNKS_BUCKET, chunk_key)
 
@@ -194,7 +191,7 @@ def create_stitched_audio_streaming(job_id: str, chapter_num: int,
                 frames = wav_file.readframes(wav_file.getnframes())
 
             # Apply crossfade if not first chunk
-            if chunk_index == 0:
+            if idx == 0:
                 # First chunk - write most of it directly
                 if total_chunks > 1 and len(frames) > crossfade_samples * SAMPLE_WIDTH:
                     # Write all but the last crossfade_samples
@@ -216,7 +213,7 @@ def create_stitched_audio_streaming(job_id: str, chapter_num: int,
                     output_wav.writeframes(frames)
 
                 # Save overlap for next iteration if not last chunk
-                if chunk_index < total_chunks - 1 and len(frames) > crossfade_samples * SAMPLE_WIDTH:
+                if idx < total_chunks - 1 and len(frames) > crossfade_samples * SAMPLE_WIDTH:
                     # Keep last crossfade_samples for next iteration
                     samples_to_keep = crossfade_samples * SAMPLE_WIDTH
                     previous_overlap = frames[-samples_to_keep:]
@@ -226,7 +223,7 @@ def create_stitched_audio_streaming(job_id: str, chapter_num: int,
             # Free memory
             del chunk_data
             del frames
-            logger.info(f"Completed processing chunk {chunk_index+1}/{total_chunks}")
+            logger.info(f"Completed processing chunk {idx+1}/{total_chunks}")
 
     logger.info(f"Successfully stitched {total_chunks} chunks to {temp_path}")
     return temp_path
@@ -382,25 +379,27 @@ def concatenate_wav_with_crossfade(wav_chunks: List[bytes]) -> bytes:
     return result
 
 
-def store_final_audio(job_id: str, chapter_num: int, chapter_title: str,
-                     wav_data: bytes) -> str:
+def store_final_audio(job_id: str, part_number: int, wav_data: bytes, total_parts: int = None) -> str:
     """
     Store final stitched audio in S3
+    Changed to duration-based parts instead of chapters
 
     Returns:
         S3 key of stored audio
     """
-    output_key = f"jobs/{job_id}/chapter_{chapter_num:02d}.wav"
+    output_key = f"jobs/{job_id}/part_{part_number:02d}.wav"
 
     metadata = {
         'job_id': job_id,
-        'chapter_number': str(chapter_num),
-        'chapter_title': chapter_title,
+        'part_number': str(part_number),
         'audio_size': str(len(wav_data)),
         'sample_rate': str(SAMPLE_RATE),
         'channels': str(CHANNELS),
         'processing': 'stitched_with_crossfade'
     }
+
+    if total_parts:
+        metadata['total_parts'] = str(total_parts)
 
     logger.info(f"Storing final audio to s3://{FINAL_AUDIO_BUCKET}/{output_key}")
 
@@ -415,18 +414,19 @@ def store_final_audio(job_id: str, chapter_num: int, chapter_title: str,
     return output_key
 
 
-def cleanup_chunks(job_id: str, chapter_num: int, total_chunks: int):
+def cleanup_chunks(job_id: str, chunk_indices: List[int]):
     """
     Clean up intermediate chunk files after successful stitching
+    Changed to whole-book processing - removed chapter references
     """
-    logger.info(f"Cleaning up {total_chunks} chunk files")
+    logger.info(f"Cleaning up {len(chunk_indices)} chunk files")
 
     try:
         # Delete audio chunks
         audio_keys = []
-        for i in range(total_chunks):
+        for chunk_index in chunk_indices:
             audio_keys.append({
-                'Key': f"{job_id}/chapter_{chapter_num:02d}/audio_chunk_{i:03d}.wav"
+                'Key': f"{job_id}/chunk_{chunk_index:04d}.wav"
             })
 
         if audio_keys:
@@ -440,28 +440,59 @@ def cleanup_chunks(job_id: str, chapter_num: int, total_chunks: int):
         logger.warning(f"Error during cleanup (non-critical): {str(e)}")
 
 
+def calculate_duration_based_segments(total_chunks: int, target_duration_hours: float = 1.0) -> List[List[int]]:
+    """
+    Calculate how to group chunks into duration-based segments
+
+    Estimate: 4500 tokens ≈ 3 minutes audio (adjust based on testing)
+
+    Args:
+        total_chunks: Total number of audio chunks
+        target_duration_hours: Target duration for each segment in hours (default: 1.0)
+
+    Returns:
+        List of chunk index lists, where each sublist represents one segment
+    """
+    # Rough estimate: 4500 tokens ≈ 180 seconds (3 minutes)
+    # This is conservative; actual may vary
+    ESTIMATED_SECONDS_PER_CHUNK = 180
+    TARGET_SEGMENT_SECONDS = target_duration_hours * 3600
+
+    chunks_per_segment = int(TARGET_SEGMENT_SECONDS / ESTIMATED_SECONDS_PER_CHUNK)
+    if chunks_per_segment < 1:
+        chunks_per_segment = 1
+
+    logger.info(f"Estimated {ESTIMATED_SECONDS_PER_CHUNK}s per chunk, targeting {TARGET_SEGMENT_SECONDS}s segments")
+    logger.info(f"Will group ~{chunks_per_segment} chunks per segment")
+
+    segments = []
+    for i in range(0, total_chunks, chunks_per_segment):
+        segment_chunks = list(range(i, min(i + chunks_per_segment, total_chunks)))
+        segments.append(segment_chunks)
+
+    logger.info(f"Created {len(segments)} segments from {total_chunks} chunks")
+    for idx, segment in enumerate(segments):
+        estimated_minutes = (len(segment) * ESTIMATED_SECONDS_PER_CHUNK) / 60
+        logger.info(f"  Segment {idx+1}: {len(segment)} chunks (~{estimated_minutes:.1f} minutes)")
+
+    return segments
+
+
 def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     """
     Lambda handler for audio stitching
+    Changed to whole-book processing with duration-based segments
+
     Triggered by completion messages from TTS generation lambda
 
-    Can be triggered by:
-    1. SQS messages for individual chunk completions
-    2. Direct invocation to stitch a specific chapter
-
-    SQS Message format:
+    New SQS Message format (whole-book):
     {
         "job_id": "book-123",
-        "chapter": {
-            "number": 1,
-            "title": "Introduction"
-        },
-        "chunk": {
-            "index": 0,
-            "total": 5,
-            "audio_s3_key": "job-123/chapter_01/audio_chunk_000.wav",
-            "audio_bucket": "audio-chunks-bucket"
-        }
+        "chunk_index": 0,
+        "total_chunks": 50,
+        "audio_s3_key": "book-123/chunk_0000.wav",
+        "audio_bucket": "audio-chunks-bucket",
+        "status": "audio_generated"
     }
     """
     try:
@@ -469,7 +500,7 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         records = event.get('Records', [])
 
         if records:
-            # Process SQS records
+            # Process SQS records (chunk completion notifications)
             results = []
 
             for record in records:
@@ -477,63 +508,75 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                     message_body = json.loads(record['body'])
 
                     job_id = message_body['job_id']
-                    chapter_info = message_body['chapter']
-                    chunk_info = message_body['chunk']
-
-                    chapter_num = chapter_info['number']
-                    chapter_title = chapter_info['title']
-                    chunk_index = chunk_info['index']
-                    total_chunks = chunk_info['total']
+                    chunk_index = message_body['chunk_index']
+                    total_chunks = message_body['total_chunks']
 
                     logger.info(
-                        f"Chunk completion notification: Job {job_id}, Chapter {chapter_num}, "
+                        f"Chunk completion notification: Job {job_id}, "
                         f"Chunk {chunk_index+1}/{total_chunks}"
                     )
 
                     # Update tracking and check if all chunks are complete
-                    all_complete = update_chunk_status(job_id, chapter_num, chunk_index, total_chunks)
+                    all_complete = update_chunk_status(job_id, chunk_index, total_chunks)
 
                     if all_complete:
-                        logger.info(f"All chunks complete for Chapter {chapter_num}, starting stitching")
+                        logger.info(f"All {total_chunks} chunks complete for job {job_id}, starting duration-based stitching")
 
-                        # Use streaming approach to reduce memory usage
+                        # Calculate duration-based segments (~1 hour each)
+                        segments = calculate_duration_based_segments(total_chunks, target_duration_hours=1.0)
+
                         import os
-                        temp_audio_path = create_stitched_audio_streaming(job_id, chapter_num, total_chunks)
+                        segment_results = []
 
-                        try:
-                            # Read final audio from temp file for upload
-                            with open(temp_audio_path, 'rb') as f:
-                                final_wav = f.read()
+                        # Stitch each segment separately
+                        for part_num, chunk_indices in enumerate(segments, start=1):
+                            logger.info(f"Stitching part {part_num}/{len(segments)} with {len(chunk_indices)} chunks")
 
-                            # Store final audio
-                            final_key = store_final_audio(
-                                job_id, chapter_num, chapter_title, final_wav
-                            )
+                            # Use streaming approach to reduce memory usage
+                            temp_audio_path = create_stitched_audio_streaming(job_id, chunk_indices)
 
-                            # Clean up intermediate files
-                            cleanup_chunks(job_id, chapter_num, total_chunks)
+                            try:
+                                # Read final audio from temp file for upload
+                                with open(temp_audio_path, 'rb') as f:
+                                    final_wav = f.read()
 
-                            results.append({
-                                'job_id': job_id,
-                                'chapter_number': chapter_num,
-                                'chapter_title': chapter_title,
-                                'status': 'stitched',
-                                'output_key': final_key,
-                                'audio_size': len(final_wav),
-                                's3_location': f's3://{FINAL_AUDIO_BUCKET}/{final_key}'
-                            })
+                                # Store final audio as part_XX.wav
+                                final_key = store_final_audio(
+                                    job_id, part_num, final_wav, total_parts=len(segments)
+                                )
 
-                            logger.info(f"Successfully stitched Chapter {chapter_num}: {final_key}")
+                                segment_results.append({
+                                    'part_number': part_num,
+                                    'output_key': final_key,
+                                    'audio_size': len(final_wav),
+                                    'chunk_count': len(chunk_indices),
+                                    's3_location': f's3://{FINAL_AUDIO_BUCKET}/{final_key}'
+                                })
 
-                        finally:
-                            # Clean up temp file
-                            if os.path.exists(temp_audio_path):
-                                os.remove(temp_audio_path)
-                                logger.info(f"Cleaned up temporary file: {temp_audio_path}")
+                                logger.info(f"Successfully stitched part {part_num}: {final_key}")
+
+                            finally:
+                                # Clean up temp file
+                                if os.path.exists(temp_audio_path):
+                                    os.remove(temp_audio_path)
+
+                        # Clean up ALL intermediate chunk files after all segments are done
+                        all_chunk_indices = list(range(total_chunks))
+                        cleanup_chunks(job_id, all_chunk_indices)
+
+                        results.append({
+                            'job_id': job_id,
+                            'total_chunks': total_chunks,
+                            'total_parts': len(segments),
+                            'status': 'stitched',
+                            'parts': segment_results
+                        })
+
+                        logger.info(f"Successfully stitched job {job_id} into {len(segments)} parts")
+
                     else:
                         results.append({
                             'job_id': job_id,
-                            'chapter_number': chapter_num,
                             'chunk_index': chunk_index,
                             'status': 'chunk_recorded'
                         })
@@ -554,49 +597,56 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             }
 
         else:
-            # Direct invocation to force stitching
+            # Direct invocation to force stitching (whole-book)
             job_id = event.get('job_id')
-            chapter_num = event.get('chapter_number')
             total_chunks = event.get('total_chunks')
-            chapter_title = event.get('chapter_title', f'Chapter {chapter_num}')
+            target_duration_hours = event.get('target_duration_hours', 1.0)
 
-            if not all([job_id, chapter_num, total_chunks]):
+            if not all([job_id, total_chunks]):
                 return {
                     'statusCode': 400,
                     'body': json.dumps({
-                        'error': 'Direct invocation requires job_id, chapter_number, and total_chunks'
+                        'error': 'Direct invocation requires job_id and total_chunks'
                     })
                 }
 
-            logger.info(f"Direct stitching request for Chapter {chapter_num}")
+            logger.info(f"Direct stitching request for job {job_id} with {total_chunks} chunks")
 
-            # Use streaming approach to reduce memory usage
+            # Calculate duration-based segments
+            segments = calculate_duration_based_segments(total_chunks, target_duration_hours)
+
             import os
-            temp_audio_path = create_stitched_audio_streaming(job_id, chapter_num, total_chunks)
+            segment_results = []
 
-            try:
-                # Read final audio from temp file for upload
-                with open(temp_audio_path, 'rb') as f:
-                    final_wav = f.read()
+            # Stitch each segment
+            for part_num, chunk_indices in enumerate(segments, start=1):
+                temp_audio_path = create_stitched_audio_streaming(job_id, chunk_indices)
 
-                # Store final audio
-                final_key = store_final_audio(job_id, chapter_num, chapter_title, final_wav)
+                try:
+                    with open(temp_audio_path, 'rb') as f:
+                        final_wav = f.read()
 
-                return {
-                    'statusCode': 200,
-                    'body': json.dumps({
-                        'message': 'Chapter stitched successfully',
+                    final_key = store_final_audio(job_id, part_num, final_wav, total_parts=len(segments))
+
+                    segment_results.append({
+                        'part_number': part_num,
                         'output_key': final_key,
                         'audio_size': len(final_wav),
                         's3_location': f's3://{FINAL_AUDIO_BUCKET}/{final_key}'
                     })
-                }
 
-            finally:
-                # Clean up temp file
-                if os.path.exists(temp_audio_path):
-                    os.remove(temp_audio_path)
-                    logger.info(f"Cleaned up temporary file: {temp_audio_path}")
+                finally:
+                    if os.path.exists(temp_audio_path):
+                        os.remove(temp_audio_path)
+
+            return {
+                'statusCode': 200,
+                'body': json.dumps({
+                    'message': f'Stitched {total_chunks} chunks into {len(segments)} parts',
+                    'total_parts': len(segments),
+                    'parts': segment_results
+                })
+            }
 
     except Exception as e:
         logger.error(f"Fatal error in lambda handler: {str(e)}", exc_info=True)
