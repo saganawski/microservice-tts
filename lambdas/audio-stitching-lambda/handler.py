@@ -20,11 +20,13 @@ logger.setLevel(logging.INFO)
 # Initialize clients
 s3_client = boto3.client('s3')
 dynamodb = boto3.resource('dynamodb')
+sns_client = boto3.client('sns')
 
 # Environment variables
 AUDIO_CHUNKS_BUCKET = os.environ.get('AUDIO_CHUNKS_BUCKET', 'audio-chunks-bucket272765753210')
 FINAL_AUDIO_BUCKET = os.environ.get('PROCESSED_BUCKET_NAME', 'processed-file-bucket272765753210')
 TRACKING_TABLE = os.environ.get('TRACKING_TABLE', 'AudioChunkTracking')
+JOB_COMPLETION_TOPIC_ARN = os.environ.get('JOB_COMPLETION_TOPIC_ARN', '')
 
 # Audio format configuration
 SAMPLE_RATE = 24000
@@ -33,6 +35,45 @@ SAMPLE_WIDTH = 2
 
 # Crossfade configuration
 CROSSFADE_DURATION_MS = 50  # milliseconds
+
+
+def publish_job_completion(job_id: str, total_parts: int, parts: List[Dict]) -> bool:
+    """
+    Publish job completion notification to SNS topic.
+    
+    Args:
+        job_id: Job identifier
+        total_parts: Number of audio parts created
+        parts: List of part details with keys, sizes, etc.
+    
+    Returns:
+        True if notification was sent successfully
+    """
+    if not JOB_COMPLETION_TOPIC_ARN:
+        logger.warning("No job completion topic ARN configured, skipping notification")
+        return False
+    
+    try:
+        message = {
+            'job_id': job_id,
+            'status': 'completed',
+            'total_parts': total_parts,
+            'parts': parts,
+            'bucket': FINAL_AUDIO_BUCKET
+        }
+        
+        response = sns_client.publish(
+            TopicArn=JOB_COMPLETION_TOPIC_ARN,
+            Subject=f"TTS Job Complete: {job_id}",
+            Message=json.dumps(message)
+        )
+        
+        logger.info(f"Published job completion notification: {response.get('MessageId')}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error publishing job completion: {str(e)}")
+        return False
 
 
 def get_tracking_table():
@@ -573,6 +614,9 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                         })
 
                         logger.info(f"Successfully stitched job {job_id} into {len(segments)} parts")
+                        
+                        # Send job completion notification
+                        publish_job_completion(job_id, len(segments), segment_results)
 
                     else:
                         results.append({
@@ -638,6 +682,9 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                 finally:
                     if os.path.exists(temp_audio_path):
                         os.remove(temp_audio_path)
+
+            # Send job completion notification
+            publish_job_completion(job_id, len(segments), segment_results)
 
             return {
                 'statusCode': 200,

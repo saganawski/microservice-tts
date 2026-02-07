@@ -1,196 +1,78 @@
 # Text-to-Speech Microservice
 
-A serverless text-to-speech (TTS) system built on AWS using AWS CDK, Java 21, and Maven. This microservice processes document uploads through a series of Lambda functions, transforming text files into audio output via TTS services.
+A serverless text-to-speech (TTS) system built on AWS using CDK (Java 21), Python 3.12 Lambdas, and Maven. Processes PDF/TXT/EPUB uploads through a chunked pipeline: Textract extracts text, splits into 4,500-token chunks, converts each to audio via Gemini TTS API, then stitches chunks into final WAV files with crossfading.
 
-## 🏗️ Architecture
+## Architecture
 
-The system consists of two main CDK stacks that create a fully managed serverless pipeline:
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full pipeline diagram and resource inventory.
 
-### FileFlowStack
-- **OriginalFileBucket**: Stores uploaded files (PDF/TXT/EPUB)
-- **MarkdownFileBucket**: Stores consolidated markdown files from OCR processing for TTS processing
-- **ProcessedFileBucket**: Stores final audio files
-- **ValidationLambda**: Validates file uploads and stores in OriginalFileBucket
-- **TransformLambda**: Downloads files, processes with Mistral OCR, generates consolidated markdown files
-- **TTSLambda**: Downloads markdown files, chunks them into 900-character segments, converts to audio using OpenAI TTS
+**Pipeline**: API Gateway -> FileValidation -> S3 -> Textract -> Chunking -> TTS (Gemini) -> Stitching -> Notification
 
-### ApiStack
-- **REST API**: Provides `/file-upload` POST endpoint via API Gateway
-- **CloudWatch Integration**: Comprehensive logging with custom access log format
-- **IAM Roles**: Proper permissions for API Gateway CloudWatch logging
+**Key design decisions**:
+- Chunked processing avoids Lambda timeout limits
+- SQS FIFO queues provide ordered, deduplicated message delivery
+- DynamoDB tracks distributed chunk completion
+- Rate limiting (2 concurrent TTS lambdas) stays under Gemini's 10k tokens/min limit
+- Audio validation catches truncated/silent output with intelligent retry
 
-## 🔄 Processing Flow
-
-1. **File Upload** → API Gateway receives file via `/file-upload` endpoint
-2. **Validation** → ValidationLambda validates file type and stores in OriginalFileBucket
-3. **Transformation** → S3 event triggers TransformLambda to process file with OCR and generate markdown
-4. **TTS Processing** → MarkdownFileBucket events trigger TTSLambda to chunk and convert text to audio
-5. **Storage** → Final audio files stored in ProcessedFileBucket
-
-## 📁 Project Structure
+## Project Structure
 
 ```
 microservice-tts/
-├── cdk/                           # CDK infrastructure code
+├── cdk/                                    # CDK infrastructure (Java)
 │   └── src/main/java/com/myorg/
-│       ├── TtsApp.java           # Main CDK application
-│       ├── FileFlowStack.java    # S3 buckets and Lambda definitions
-│       └── ApiStack.java         # API Gateway configuration
-├── lambdas/                      # Lambda function implementations
-│   ├── file-validation-lambda/   # File upload validation and storage
-│   ├── file-transform-lambda/    # OCR processing and markdown generation
-│   ├── file-tts-lambda/         # Text-to-speech conversion
-│   └── notification-lambda/      # (Not currently integrated)
-├── pom.xml                      # Root Maven configuration
-├── cdk.json                     # CDK configuration
-└── CLAUDE.md                    # Development guidelines
+│       ├── TtsApp.java                     # CDK app entry point
+│       ├── FileFlowStack.java              # S3, Lambda, SQS, SNS, DynamoDB
+│       └── ApiStack.java                   # API Gateway
+├── lambdas/
+│   ├── file-validation-lambda/             # Java - validates uploads, stores in S3
+│   ├── presigned-url-lambda/               # Java - upload URL generation
+│   ├── textract-extraction-lambda/         # Python - PDF text extraction via Textract
+│   ├── text-chunking-lambda/               # Python - splits text into 4500-token chunks
+│   ├── tts-generation-lambda/              # Python - Gemini TTS with retry/validation
+│   ├── audio-stitching-lambda/             # Python - concatenates chunks with crossfading
+│   ├── notification-lambda/                # Python - email notifications with download links
+│   └── audit-lambda/                       # Python - audio quality audit via Whisper
+├── pom.xml                                 # Multi-module Maven config
+├── build-python-lambdas.sh                 # Builds all Python lambda dependencies
+└── .env.example                            # Environment variable template
 ```
 
-## 🛠️ Prerequisites
+## Prerequisites
 
-### Local Development
 - **Java 21** (OpenJDK or Oracle JDK)
 - **Apache Maven 3.6+**
-- **Node.js 18+** (for AWS CDK)
-- **AWS CDK CLI 2.x**
-```bash
-npm install -g aws-cdk
-```
-
-### AWS Deployment
+- **Python 3.12** (for Lambda dependencies)
+- **Node.js 18+** (for AWS CDK CLI)
+- **AWS CDK CLI 2.x**: `npm install -g aws-cdk`
 - **AWS CLI** configured with appropriate credentials
-- **AWS Account** with sufficient permissions for:
-  - S3 bucket creation and management
-  - Lambda function deployment
-  - API Gateway configuration
-  - CloudWatch logging
-  - IAM role creation
+- **Gemini API Key** from [Google AI Studio](https://aistudio.google.com/app/apikey)
 
-## 🚀 Getting Started
-
-### 1. Clone and Build
+## Getting Started
 
 ```bash
-git clone <repository-url>
-cd microservice-tts
-mvn package
-```
+# 1. Set up environment
+cp .env.example .env
+# Edit .env with your API keys
+source .env
 
-### 2. Deploy to AWS
+# 2. Build all lambdas
+./build-python-lambdas.sh
+mvn clean package -DskipTests
 
-```bash
-# Bootstrap CDK (first time only)
+# 3. Bootstrap CDK (first time only)
 cdk bootstrap
 
-# Deploy all stacks
+# 4. Deploy
 cdk deploy --all
-
-# Or deploy individual stacks
-cdk deploy FileFlowStack
-cdk deploy ApiStack
 ```
 
-### 3. Verify Deployment
+## Supported File Types
 
-```bash
-# List deployed stacks
-cdk ls
+- PDF (`application/pdf`)
+- EPUB (`application/epub+zip`)
+- Plain Text (`text/plain`)
 
-# View stack outputs
-aws cloudformation describe-stacks --stack-name FileFlowStack
-aws cloudformation describe-stacks --stack-name ApiStack
-```
+## Development
 
-## 🧪 Development Commands
-
-### Build and Test
-```bash
-# Build entire project
-mvn package
-
-# Build specific lambda
-mvn -f lambdas/file-validation-lambda/pom.xml package
-
-# Run tests
-mvn test
-
-# Run tests for specific module
-mvn -f cdk/pom.xml test
-```
-
-### CDK Operations
-```bash
-# List all stacks
-cdk ls
-
-# Synthesize CloudFormation templates
-cdk synth
-
-# Show differences from deployed stacks
-cdk diff
-
-# Destroy stacks (cleanup)
-cdk destroy --all
-```
-
-## 📝 Supported File Types
-
-- **PDF** (`application/pdf`)
-- **EPUB** (`application/epub+zip`)  
-- **Plain Text** (`text/plain`)
-
-## 🔧 Configuration
-
-### Environment Variables
-- `ORIGINAL_BUCKET_NAME`: Set automatically by CDK deployment
-- Account Number: Hardcoded as `272765753210` in bucket naming
-
-### TTS Configuration
-- **Chunk Limit**: 900 characters per chunk for TTS processing
-- **Lambda Timeout**: 5 minutes for all functions
-- **Memory**: Configured per lambda function requirements
-
-## 🚧 Current Implementation Status
-
-- ✅ **ValidationLambda**: Complete file upload and validation
-- ✅ **API Gateway**: REST endpoint with proper error handling
-- ✅ **TransformLambda**: OCR processing and markdown generation complete
-- ✅ **TTSLambda**: Markdown chunking and OpenAI TTS conversion complete
-- ❓ **NotificationLambda**: Exists but not integrated
-
-## 🔍 Monitoring and Logging
-
-All Lambda functions include comprehensive CloudWatch logging:
-- Request/response logging
-- Error tracking and debugging
-- Performance metrics
-- S3 operation status
-
-## 🤝 Contributing
-
-1. Follow existing code conventions
-2. Ensure all tests pass before submitting
-3. Update documentation for significant changes
-4. Use Java 21 features appropriately
-
-## 📄 License
-
-[Add your license information here]
-
-## 🆘 Troubleshooting
-
-### Common Issues
-
-**Build Failures**
-- Ensure Java 21 is installed and configured
-- Run `mvn clean package` to clear build cache
-
-**Deployment Issues** 
-- Verify AWS credentials are configured
-- Check CDK bootstrap status: `cdk bootstrap --show-template`
-- Ensure sufficient AWS permissions
-
-**Lambda Timeouts**
-- Current timeout is 5 minutes
-- Check CloudWatch logs for performance issues
-- Consider increasing memory allocation for large files
+See [CLAUDE.md](CLAUDE.md) for detailed development commands, environment variables, and troubleshooting.

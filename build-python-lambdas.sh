@@ -16,6 +16,8 @@ PYTHON_LAMBDAS=(
     "lambdas/text-chunking-lambda"
     "lambdas/audio-stitching-lambda"
     "lambdas/tts-generation-lambda"
+    "lambdas/notification-lambda"
+    "lambdas/audit-lambda"
 )
 
 # Build each Python lambda

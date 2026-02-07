@@ -1,0 +1,8 @@
+# OpenAI Whisper API client
+openai>=1.0.0
+
+# Word Error Rate calculation
+jiwer>=3.0.0
+
+# AWS SDK (usually available in Lambda runtime, but pin for local dev)
+boto3>=1.28.0
