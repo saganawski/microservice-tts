@@ -27,6 +27,7 @@ AUDIO_CHUNKS_BUCKET = os.environ.get('AUDIO_CHUNKS_BUCKET', 'audio-chunks-bucket
 FINAL_AUDIO_BUCKET = os.environ.get('PROCESSED_BUCKET_NAME', 'processed-file-bucket272765753210')
 TRACKING_TABLE = os.environ.get('TRACKING_TABLE', 'AudioChunkTracking')
 JOB_COMPLETION_TOPIC_ARN = os.environ.get('JOB_COMPLETION_TOPIC_ARN', '')
+JOB_STATUS_TABLE = os.environ.get('JOB_STATUS_TABLE', '')
 
 # Audio format configuration
 SAMPLE_RATE = 24000
@@ -35,6 +36,28 @@ SAMPLE_WIDTH = 2
 
 # Crossfade configuration
 CROSSFADE_DURATION_MS = 50  # milliseconds
+
+
+def update_job_status(job_id, status, **kwargs):
+    if not JOB_STATUS_TABLE:
+        return
+    try:
+        from datetime import datetime
+        table = dynamodb.Table(JOB_STATUS_TABLE)
+        update_expr = 'SET #s = :s, updated_at = :u'
+        expr_values = {':s': status, ':u': datetime.now().isoformat()}
+        expr_names = {'#s': 'status'}
+        for k, v in kwargs.items():
+            update_expr += f', {k} = :{k}'
+            expr_values[f':{k}'] = v
+        table.update_item(
+            Key={'job_id': job_id},
+            UpdateExpression=update_expr,
+            ExpressionAttributeValues=expr_values,
+            ExpressionAttributeNames=expr_names,
+        )
+    except Exception as e:
+        logger.warning(f"Failed to update job status: {e}")
 
 
 def publish_job_completion(job_id: str, total_parts: int, parts: List[Dict]) -> bool:
@@ -562,6 +585,7 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
 
                     if all_complete:
                         logger.info(f"All {total_chunks} chunks complete for job {job_id}, starting duration-based stitching")
+                        update_job_status(job_id, 'STITCHING', progress=92)
 
                         # Calculate duration-based segments (~1 hour each)
                         segments = calculate_duration_based_segments(total_chunks, target_duration_hours=1.0)
@@ -614,7 +638,9 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                         })
 
                         logger.info(f"Successfully stitched job {job_id} into {len(segments)} parts")
-                        
+
+                        update_job_status(job_id, 'COMPLETE', progress=100)
+
                         # Send job completion notification
                         publish_job_completion(job_id, len(segments), segment_results)
 

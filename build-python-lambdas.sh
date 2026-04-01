@@ -13,6 +13,7 @@ echo "========================================="
 # List of Python lambda directories
 PYTHON_LAMBDAS=(
     "lambdas/textract-extraction-lambda"
+    "lambdas/emotion-preprocessing"
     "lambdas/text-chunking-lambda"
     "lambdas/audio-stitching-lambda"
     "lambdas/tts-generation-lambda"

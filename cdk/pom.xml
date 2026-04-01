@@ -25,6 +25,8 @@
                 <version>3.11.0</version>
                 <configuration>
                     <release>21</release>
+                    <fork>true</fork>
+                    <executable>/usr/lib/jvm/java-21-openjdk-amd64/bin/javac</executable>
                 </configuration>
             </plugin>
             <!-- Exec Maven Plugin -->

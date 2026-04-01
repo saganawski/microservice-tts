@@ -17,3 +17,48 @@ target/
 cdk.out
 .venv
 venv/
+
+# Environment files with secrets
+.env
+.env.local
+*.env.local
+
+# Build artifacts
+lambdas/**/__pycache__/
+lambdas/**/*.zip
+.next/
+
+# Vendored runtime deps (provided by Lambda runtime or layer)
+lambdas/notification-lambda/boto3*/
+lambdas/notification-lambda/boto3/
+lambdas/notification-lambda/botocore*/
+lambdas/notification-lambda/botocore/
+lambdas/notification-lambda/s3transfer*/
+lambdas/notification-lambda/s3transfer/
+lambdas/notification-lambda/jmespath*/
+lambdas/notification-lambda/jmespath/
+lambdas/notification-lambda/dateutil/
+lambdas/notification-lambda/python_dateutil*/
+lambdas/notification-lambda/urllib3*/
+lambdas/notification-lambda/urllib3/
+lambdas/notification-lambda/six*/
+lambdas/notification-lambda/six.py
+lambdas/notification-lambda/bin/
+lambdas/notification-lambda/package/
+
+# Test data & spikes
+test-books/
+voice-samples/
+tts-eval/
+test-*.pdf
+
+# Frontend experiments (not production)
+frontend*/
+
+# Server implementations (deployed separately on EC2)
+moss-server/
+orpheus-server/
+
+# Spike docs
+tts-deployment-spike.md
+TICKET-*.md

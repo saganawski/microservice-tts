@@ -95,9 +95,9 @@ cd lambdas/tts-generation-lambda && ./package.sh
 
 **TextractExtractionLambda**: `TEXTRACT_RESULTS_BUCKET`, `CHUNKING_QUEUE_URL`
 
-**TextChunkingLambda**: `TEXTRACT_RESULTS_BUCKET`, `TEXT_CHUNKS_BUCKET`, `TTS_QUEUE_URL`, `MAX_TOKENS_PER_CHUNK` (4500)
+**TextChunkingLambda**: `TEXTRACT_RESULTS_BUCKET`, `TEXT_CHUNKS_BUCKET`, `TTS_QUEUE_URL`, `MAX_TOKENS_PER_CHUNK` (4500), `TTS_PROVIDER` (gemini|orpheus, default: gemini), `CHUNK_SIZE_TOKENS` (optional override; auto-sets to 1500 for orpheus)
 
-**TTSGenerationLambda**: `GEMINI_API_KEY`, `AUDIO_CHUNKS_BUCKET`, `TEXT_CHUNKS_BUCKET`, `STITCH_QUEUE_URL`, `GEMINI_TTS_MODEL` (gemini-2.5-pro-preview-tts), `GEMINI_TTS_VOICE` (Charon), `MAX_RETRY_ATTEMPTS` (5), `INITIAL_WAIT` (10), `MAX_WAIT` (120), `VALIDATION_ALERT_TOPIC_ARN`
+**TTSGenerationLambda**: `GEMINI_API_KEY`, `AUDIO_CHUNKS_BUCKET`, `TEXT_CHUNKS_BUCKET`, `STITCH_QUEUE_URL`, `GEMINI_TTS_MODEL` (gemini-2.5-pro-preview-tts), `GEMINI_TTS_VOICE` (Charon), `MAX_RETRY_ATTEMPTS` (5), `INITIAL_WAIT` (10), `MAX_WAIT` (120), `VALIDATION_ALERT_TOPIC_ARN`, `MOSS_VOICE_REFERENCE` (seed_045 — voice name for MOSS voice cloning; WAV stored at s3://tts-eval-data-272765753210/voices/)
 
 **AudioStitchingLambda**: `AUDIO_CHUNKS_BUCKET`, `PROCESSED_BUCKET_NAME`, `TRACKING_TABLE`, `CROSSFADE_DURATION_MS` (50), `JOB_COMPLETION_TOPIC_ARN`
 

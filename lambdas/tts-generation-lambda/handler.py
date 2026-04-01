@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
 TTS Generation Lambda with Retry Logic
-Consumes text chunks from SQS and generates audio files using Gemini TTS
+Consumes text chunks from SQS and generates audio files using Gemini, Orpheus, or MOSS TTS
 """
 
 import json
 import boto3
 import os
+import base64
 from datetime import datetime
 import wave
 import io
@@ -17,6 +18,7 @@ from typing import Dict, Any
 import logging
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from google.genai.errors import ClientError
+import requests
 
 
 # Configure logging
@@ -26,15 +28,81 @@ logger.setLevel(logging.INFO)
 # Initialize clients
 s3_client = boto3.client('s3')
 sqs_client = boto3.client('sqs')
+dynamodb = boto3.resource('dynamodb')
+secrets_client = boto3.client('secretsmanager')
 _genai_client = None
 
-# Environment variables
-GEMINI_API_KEY = os.environ['GEMINI_API_KEY']
+# Load Gemini API key from Secrets Manager at cold start
+_secret_name = os.environ.get('GEMINI_SECRET_NAME', 'microservice-tts/gemini-api-key')
+_secret_resp = secrets_client.get_secret_value(SecretId=_secret_name)
+GEMINI_API_KEY = json.loads(_secret_resp['SecretString'])['api_key']
+JOB_STATUS_TABLE = os.environ.get('JOB_STATUS_TABLE', '')
 OUTPUT_BUCKET = os.environ.get('AUDIO_CHUNKS_BUCKET', 'audio-chunks-bucket272765753210')
 TEXT_CHUNKS_BUCKET = os.environ.get('TEXT_CHUNKS_BUCKET', 'text-chunks-bucket272765753210')
 STITCH_QUEUE_URL = os.environ.get('STITCH_QUEUE_URL')
 
-# Model configuration
+# TTS provider configuration
+TTS_PROVIDER = os.environ.get('TTS_PROVIDER', 'gemini')  # 'gemini', 'orpheus', or 'moss'
+ORPHEUS_API_URL_ENV = os.environ.get('ORPHEUS_API_URL', '')  # static fallback
+ORPHEUS_SSM_PARAM = os.environ.get('ORPHEUS_SSM_PARAM', '/microservice-tts/orpheus-api-url')
+ORPHEUS_VOICE = os.environ.get('ORPHEUS_VOICE', 'tara')
+ORPHEUS_TIMEOUT = 300  # 5 minutes for long chunks
+
+# MOSS TTS configuration (same REST API contract as Orpheus)
+MOSS_API_URL_ENV = os.environ.get('MOSS_API_URL', '')  # static fallback
+MOSS_SSM_PARAM = os.environ.get('MOSS_SSM_PARAM', '/microservice-tts/moss-api-url')
+MOSS_TIMEOUT = int(os.environ.get('MOSS_TIMEOUT', '300'))  # 5 minutes for long chunks
+MOSS_VOICE_REFERENCE = os.environ.get('MOSS_VOICE_REFERENCE', 'seed_045')  # default voice for cloning
+
+# SSM-based dynamic URL cache (IP changes on EC2 restart)
+_cached_orpheus_url = None
+_orpheus_url_fetched_at = 0
+_cached_moss_url = None
+_moss_url_fetched_at = 0
+_URL_CACHE_TTL = 300  # refresh every 5 minutes
+
+
+def _get_ec2_api_url(ssm_param, env_fallback, cache_ref):
+    """Get EC2-hosted API URL from SSM Parameter Store with caching, fallback to env var."""
+    cached_url, fetched_at = cache_ref
+
+    now = time.time()
+    if cached_url and (now - fetched_at) < _URL_CACHE_TTL:
+        return cached_url, fetched_at
+
+    try:
+        ssm = boto3.client('ssm')
+        resp = ssm.get_parameter(Name=ssm_param)
+        url = resp['Parameter']['Value']
+        logger.info(f"Fetched API URL from SSM ({ssm_param}): {url}")
+        return url, now
+    except Exception as e:
+        logger.warning(f"Failed to read URL from SSM ({ssm_param}): {e}")
+        if cached_url:
+            return cached_url, fetched_at
+        return env_fallback, 0
+
+
+def get_orpheus_api_url():
+    """Get Orpheus API URL from SSM Parameter Store with caching, fallback to env var."""
+    global _cached_orpheus_url, _orpheus_url_fetched_at
+    _cached_orpheus_url, _orpheus_url_fetched_at = _get_ec2_api_url(
+        ORPHEUS_SSM_PARAM, ORPHEUS_API_URL_ENV,
+        (_cached_orpheus_url, _orpheus_url_fetched_at)
+    )
+    return _cached_orpheus_url
+
+
+def get_moss_api_url():
+    """Get MOSS API URL from SSM Parameter Store with caching, fallback to env var."""
+    global _cached_moss_url, _moss_url_fetched_at
+    _cached_moss_url, _moss_url_fetched_at = _get_ec2_api_url(
+        MOSS_SSM_PARAM, MOSS_API_URL_ENV,
+        (_cached_moss_url, _moss_url_fetched_at)
+    )
+    return _cached_moss_url
+
+# Gemini model configuration
 TTS_MODEL = os.environ.get('GEMINI_TTS_MODEL', 'gemini-2.5-pro-preview-tts')
 TTS_VOICE = os.environ.get('GEMINI_TTS_VOICE', 'Charon')
 
@@ -48,6 +116,27 @@ MAX_RETRY_ATTEMPTS = 5
 INITIAL_WAIT = 10  # seconds
 MAX_WAIT = 120  # seconds
 EXPONENTIAL_MULTIPLIER = 2
+
+
+def update_job_status(job_id, status, **kwargs):
+    if not JOB_STATUS_TABLE:
+        return
+    try:
+        table = dynamodb.Table(JOB_STATUS_TABLE)
+        update_expr = 'SET #s = :s, updated_at = :u'
+        expr_values = {':s': status, ':u': datetime.now().isoformat()}
+        expr_names = {'#s': 'status'}
+        for k, v in kwargs.items():
+            update_expr += f', {k} = :{k}'
+            expr_values[f':{k}'] = v
+        table.update_item(
+            Key={'job_id': job_id},
+            UpdateExpression=update_expr,
+            ExpressionAttributeValues=expr_values,
+            ExpressionAttributeNames=expr_names,
+        )
+    except Exception as e:
+        logger.warning(f"Failed to update job status: {e}")
 
 
 def get_genai_client():
@@ -68,6 +157,102 @@ def is_rate_limit_error(exception):
     return False
 
 
+class OrpheusError(Exception):
+    """Raised when Orpheus API call fails."""
+    pass
+
+
+class MossError(Exception):
+    """Raised when MOSS TTS API call fails."""
+    pass
+
+
+# Voice reference bucket for voice cloning
+VOICE_REFERENCE_BUCKET = 'tts-eval-data-272765753210'
+VOICE_REFERENCE_PREFIX = 'voices'
+
+
+def generate_speech_moss(text: str, seed: int | None = None, reference_audio: str | None = None) -> bytes:
+    """
+    Generate speech using the self-hosted MOSS-TTS 8B API.
+    Returns raw WAV bytes (24kHz, 16-bit PCM, mono).
+    Same REST API contract as Orpheus.
+
+    Args:
+        reference_audio: Base64-encoded WAV data for voice cloning.
+    """
+    moss_base = get_moss_api_url()
+    url = f"{moss_base.rstrip('/')}/generate"
+    logger.info(f"Calling MOSS API at {url}, text length: {len(text)} chars, seed: {seed}, has_reference_audio: {reference_audio is not None}")
+
+    payload = {"text": text}
+    if seed is not None:
+        payload["seed"] = seed
+    if reference_audio is not None:
+        payload["reference_audio"] = reference_audio
+
+    try:
+        response = requests.post(
+            url,
+            json=payload,
+            timeout=MOSS_TIMEOUT,
+        )
+        response.raise_for_status()
+    except requests.exceptions.ConnectionError as e:
+        raise MossError(f"MOSS connection refused: {e}")
+    except requests.exceptions.Timeout as e:
+        raise MossError(f"MOSS request timed out after {MOSS_TIMEOUT}s: {e}")
+    except requests.exceptions.HTTPError as e:
+        status = e.response.status_code if e.response is not None else 'unknown'
+        body = e.response.text[:500] if e.response is not None else ''
+        if status == 503:
+            raise MossError(f"MOSS server busy (503): {body}")
+        raise MossError(f"MOSS HTTP {status}: {body}")
+
+    wav_data = response.content
+    if len(wav_data) < 44:  # WAV header is 44 bytes minimum
+        raise MossError(f"MOSS returned invalid audio ({len(wav_data)} bytes)")
+
+    duration = response.headers.get('X-Audio-Duration-Seconds', 'unknown')
+    request_id = response.headers.get('X-Request-Id', 'unknown')
+    logger.info(f"MOSS generated {len(wav_data)} bytes of WAV audio (duration: {duration}s, req: {request_id})")
+    return wav_data
+
+
+def generate_speech_orpheus(text: str, voice: str = ORPHEUS_VOICE) -> bytes:
+    """
+    Generate speech using the self-hosted Orpheus 3B API.
+    Returns raw WAV bytes (24kHz, 16-bit PCM, mono).
+    """
+    orpheus_base = get_orpheus_api_url()
+    url = f"{orpheus_base.rstrip('/')}/generate"
+    logger.info(f"Calling Orpheus API at {url}, voice: {voice}, text length: {len(text)} chars")
+
+    try:
+        response = requests.post(
+            url,
+            json={"text": text, "voice": voice},
+            timeout=ORPHEUS_TIMEOUT,
+        )
+        response.raise_for_status()
+    except requests.exceptions.ConnectionError as e:
+        raise OrpheusError(f"Orpheus connection refused: {e}")
+    except requests.exceptions.Timeout as e:
+        raise OrpheusError(f"Orpheus request timed out after {ORPHEUS_TIMEOUT}s: {e}")
+    except requests.exceptions.HTTPError as e:
+        status = e.response.status_code if e.response is not None else 'unknown'
+        body = e.response.text[:500] if e.response is not None else ''
+        raise OrpheusError(f"Orpheus HTTP {status}: {body}")
+
+    wav_data = response.content
+    if len(wav_data) < 44:  # WAV header is 44 bytes minimum
+        raise OrpheusError(f"Orpheus returned invalid audio ({len(wav_data)} bytes)")
+
+    duration = response.headers.get('X-Audio-Duration-Seconds', 'unknown')
+    logger.info(f"Orpheus generated {len(wav_data)} bytes of WAV audio (duration: {duration}s)")
+    return wav_data
+
+
 @retry(
     stop=stop_after_attempt(MAX_RETRY_ATTEMPTS),
     wait=wait_exponential(
@@ -78,20 +263,13 @@ def is_rate_limit_error(exception):
     retry=retry_if_exception_type(ClientError),
     reraise=True
 )
-def generate_speech_with_retry(text: str, voice_name: str = TTS_VOICE,
-                               model: str = TTS_MODEL) -> bytes:
+def generate_speech_gemini(text: str, voice_name: str = TTS_VOICE,
+                           model: str = TTS_MODEL) -> bytes:
     """
-    Generate speech from text using Gemini TTS with retry logic
-
-    Args:
-        text: Text to convert to speech
-        voice_name: Voice to use
-        model: Gemini model to use
-
-    Returns:
-        Raw PCM audio data as bytes
+    Generate speech from text using Gemini TTS with retry logic.
+    Returns raw PCM audio data as bytes.
     """
-    logger.info(f"Attempting TTS generation with model: {model}, voice: {voice_name}")
+    logger.info(f"Attempting Gemini TTS with model: {model}, voice: {voice_name}")
 
     try:
         client = get_genai_client()
@@ -111,17 +289,14 @@ def generate_speech_with_retry(text: str, voice_name: str = TTS_VOICE,
             )
         )
 
-        # Check if we got valid response
         if not response or not response.candidates:
             raise ValueError("Empty response from Gemini TTS API")
 
         if not response.candidates[0].content or not response.candidates[0].content.parts:
             raise ValueError("No audio content in Gemini TTS response")
 
-        # Extract PCM data
         pcm_data = response.candidates[0].content.parts[0].inline_data.data
 
-        # Log token usage
         if hasattr(response, 'usage_metadata'):
             usage = response.usage_metadata
             logger.info(
@@ -130,21 +305,86 @@ def generate_speech_with_retry(text: str, voice_name: str = TTS_VOICE,
                 f"Total: {usage.total_token_count}"
             )
 
-        logger.info(f"Successfully generated {len(pcm_data)} bytes of PCM audio")
+        logger.info(f"Gemini generated {len(pcm_data)} bytes of PCM audio")
         return pcm_data
 
     except ClientError as e:
         error_str = str(e)
         if '429' in error_str or 'RESOURCE_EXHAUSTED' in error_str:
             logger.warning(f"Rate limit error, will retry with exponential backoff: {error_str}")
-            raise  # Let retry decorator handle it
+            raise
         else:
             logger.error(f"Non-retryable Gemini API error: {error_str}")
             raise
 
     except Exception as e:
-        logger.error(f"Unexpected error in TTS generation: {str(e)}")
+        logger.error(f"Unexpected error in Gemini TTS generation: {str(e)}")
         raise
+
+
+def download_voice_reference_b64(voice: str) -> str:
+    """Download voice reference WAV from S3 and return as base64 string for MOSS voice cloning."""
+    s3_key = f"{VOICE_REFERENCE_PREFIX}/{voice}.wav"
+    logger.info(f"Downloading voice reference s3://{VOICE_REFERENCE_BUCKET}/{s3_key}")
+    response = s3_client.get_object(Bucket=VOICE_REFERENCE_BUCKET, Key=s3_key)
+    wav_bytes = response['Body'].read()
+    b64 = base64.b64encode(wav_bytes).decode('ascii')
+    logger.info(f"Voice reference loaded: {len(wav_bytes)} bytes -> {len(b64)} chars base64")
+    return b64
+
+
+def generate_speech_with_retry(text: str, seed: int | None = None, voice: str | None = None) -> bytes:
+    """
+    Generate speech using the configured provider.
+    EC2-hosted providers (Orpheus/MOSS) fall back to Gemini on failure.
+
+    Returns:
+        WAV audio data as bytes.
+    """
+    provider = TTS_PROVIDER.lower()
+
+    if provider == 'moss':
+        moss_url = get_moss_api_url()
+        if not moss_url:
+            logger.error("TTS_PROVIDER=moss but no MOSS URL available (SSM or env), falling back to Gemini")
+            pcm_data = generate_speech_gemini(text)
+            return convert_pcm_to_wav(pcm_data)
+
+        # Always use voice cloning for consistent voice across all chunks
+        # Use explicit voice from message, or fall back to configured default
+        voice_name = voice or MOSS_VOICE_REFERENCE
+        reference_audio = None
+        try:
+            reference_audio = download_voice_reference_b64(voice_name)
+        except Exception as e:
+            logger.warning(f"Failed to download voice reference '{voice_name}': {e}")
+
+        try:
+            # MOSS returns WAV directly
+            return generate_speech_moss(text, seed=seed, reference_audio=reference_audio)
+        except MossError as e:
+            logger.warning(f"MOSS failed, falling back to Gemini: {e}")
+            pcm_data = generate_speech_gemini(text)
+            return convert_pcm_to_wav(pcm_data)
+
+    elif provider == 'orpheus':
+        orpheus_url = get_orpheus_api_url()
+        if not orpheus_url:
+            logger.error("TTS_PROVIDER=orpheus but no Orpheus URL available (SSM or env), falling back to Gemini")
+            pcm_data = generate_speech_gemini(text)
+            return convert_pcm_to_wav(pcm_data)
+
+        try:
+            # Orpheus returns WAV directly
+            return generate_speech_orpheus(text, ORPHEUS_VOICE)
+        except OrpheusError as e:
+            logger.warning(f"Orpheus failed, falling back to Gemini: {e}")
+            pcm_data = generate_speech_gemini(text)
+            return convert_pcm_to_wav(pcm_data)
+    else:
+        # Gemini returns raw PCM, wrap in WAV
+        pcm_data = generate_speech_gemini(text)
+        return convert_pcm_to_wav(pcm_data)
 
 
 def convert_pcm_to_wav(pcm_data: bytes) -> bytes:
@@ -294,6 +534,8 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                 total_chunks = message_body['total_chunks']
                 text_s3_key = message_body['text_s3_key']
                 text_bucket = message_body.get('text_s3_bucket', TEXT_CHUNKS_BUCKET)
+                seed = message_body.get('seed')
+                voice = message_body.get('voice')
 
                 logger.info(
                     f"Processing TTS for Job {job_id}, "
@@ -303,25 +545,20 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                 # Step 1: Retrieve text from S3
                 chunk_text = get_text_from_s3(text_bucket, text_s3_key)
 
-                # Step 2: Rate limiting delay to stay under 10,000 tokens/minute limit
-                # Estimate tokens: roughly 1 token per 0.75 words
-                word_count = len(chunk_text.split())
-                estimated_tokens = int(word_count * 1.3)
+                # Step 2: Rate limiting delay (only needed for Gemini, not EC2-hosted models)
+                if TTS_PROVIDER.lower() == 'gemini':
+                    word_count = len(chunk_text.split())
+                    estimated_tokens = int(word_count * 1.3)
+                    delay_seconds = (estimated_tokens / 10000) * 60
+                    if delay_seconds > 0:
+                        logger.info(
+                            f"Gemini rate limiting: estimated {estimated_tokens} tokens, "
+                            f"waiting {delay_seconds:.1f}s"
+                        )
+                        time.sleep(delay_seconds)
 
-                # Calculate delay to spread requests over time
-                # Formula: (tokens / rate_limit) * 60 seconds
-                delay_seconds = (estimated_tokens / 10000) * 60
-
-                if delay_seconds > 0:
-                    logger.info(
-                        f"Rate limiting: estimated {estimated_tokens} tokens, "
-                        f"waiting {delay_seconds:.1f}s to stay under 10k tokens/minute limit"
-                    )
-                    time.sleep(delay_seconds)
-
-                # Step 3: Generate TTS audio
-                pcm_data = generate_speech_with_retry(chunk_text)
-                wav_data = convert_pcm_to_wav(pcm_data)
+                # Step 3: Generate TTS audio (returns WAV for both providers)
+                wav_data = generate_speech_with_retry(chunk_text, seed=seed, voice=voice)
 
                 logger.info(f"Generated {len(wav_data)} bytes of WAV audio")
 
@@ -345,6 +582,15 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                 }
 
                 results.append(result)
+
+                # Update job status with chunk progress
+                completed = chunk_index + 1
+                # Progress: 25% (chunking done) + up to 65% for TTS generation
+                pct = 25 + int((completed / total_chunks) * 65)
+                update_job_status(job_id, 'GENERATING',
+                                  completed_chunks=completed,
+                                  progress=min(pct, 90))
+
                 logger.info(
                     f"Successfully generated audio for chunk {chunk_index+1}/{total_chunks}"
                 )
@@ -360,7 +606,6 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
 
                 if retry_count < 3:  # Allow message to be retried up to 3 times
                     logger.info(f"Message will be retried (attempt {retry_count}/3)")
-                    # Don't delete the message, let it become visible again
                     results.append({
                         'error': str(e),
                         'retry_count': retry_count,
@@ -368,6 +613,9 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                     })
                 else:
                     logger.error(f"Message failed after {retry_count} attempts, moving to DLQ")
+                    update_job_status(
+                        message_body.get('job_id', 'unknown'), 'FAILED',
+                        error_message=f"TTS generation failed after {retry_count} attempts: {str(e)[:300]}")
                     results.append({
                         'error': str(e),
                         'retry_count': retry_count,

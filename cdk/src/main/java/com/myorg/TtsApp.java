@@ -11,7 +11,9 @@ public class TtsApp {
 
         new ApiStack(app, "ApiStack", StackProps.builder().build(),
                 fileFlowStack.getValidationLambda(),
-                fileFlowStack.getPresignedUrlLambda());
+                fileFlowStack.getPresignedUrlLambda(),
+                fileFlowStack.getJobStatusLambda(),
+                fileFlowStack.getUserPool());
 
         app.synth();
     }
